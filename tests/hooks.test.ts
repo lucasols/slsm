@@ -15,7 +15,11 @@ beforeEach(() => {
 test('useKey', () => {
   const localStore = createSmartLocalStorage<{
     a: string;
-  }>();
+  }>({
+    items: {
+      a: {},
+    },
+  });
 
   const { result } = renderHook(() => {
     return localStore.useKey('a');
@@ -39,7 +43,11 @@ test('useKey', () => {
 test('useKey with selector', () => {
   const localStore = createSmartLocalStorage<{
     a: { b: string; c: number };
-  }>();
+  }>({
+    items: {
+      a: {},
+    },
+  });
 
   const { result } = renderHook(() => {
     return localStore.useKeyWithSelector('a')((value) => value?.b);
@@ -63,7 +71,11 @@ test('useKey with selector', () => {
 test('useKey with selector and useExternalDeps', () => {
   const localStore = createSmartLocalStorage<{
     a: { b: string; c: number };
-  }>();
+  }>({
+    items: {
+      a: {},
+    },
+  });
 
   const { result, rerender } = renderHook(
     ({ value }: { value: number }) => {

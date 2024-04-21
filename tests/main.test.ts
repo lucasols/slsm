@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { createSmartLocalStorage } from '../src/main.js';
 import { mockEnv } from './utils.js';
 
 const { getStorageItems, reset, mockQuota, getBytes, mockedLocalStorage } =
   mockEnv();
+
+vi.stubGlobal('requestIdleCallback', (cb: () => void) => cb());
 
 beforeEach(() => {
   reset();
@@ -12,7 +14,11 @@ beforeEach(() => {
 test('set and read a value in store', () => {
   const localStore = createSmartLocalStorage<{
     a: string;
-  }>();
+  }>({
+    items: {
+      a: {},
+    },
+  });
 
   localStore.set('a', 'hello');
 
@@ -26,7 +32,11 @@ test('get value from store that is set in localStorage', () => {
 
   const localStore = createSmartLocalStorage<{
     a: string;
-  }>();
+  }>({
+    items: {
+      a: {},
+    },
+  });
 
   expect(localStore.get('a')).toBe('hello');
 });
@@ -34,7 +44,11 @@ test('get value from store that is set in localStorage', () => {
 test('produce value', () => {
   const localStore = createSmartLocalStorage<{
     a: string[];
-  }>();
+  }>({
+    items: {
+      a: {},
+    },
+  });
 
   localStore.produce('a', [], (draft) => {
     draft.push('hello');
@@ -54,7 +68,11 @@ test('produce value', () => {
 test('delete value', () => {
   const localStore = createSmartLocalStorage<{
     a: string;
-  }>();
+  }>({
+    items: {
+      a: {},
+    },
+  });
 
   localStore.set('a', 'hello');
 
@@ -68,7 +86,7 @@ describe('session id', () => {
   test('store item scoped to session id', () => {
     const localStore = createSmartLocalStorage<{
       a: string;
-    }>({ getSessionId: () => 'session-id' });
+    }>({ getSessionId: () => 'session-id', items: { a: {} } });
 
     localStore.set('a', 'hello');
 
@@ -81,7 +99,7 @@ describe('session id', () => {
 
     const localStore = createSmartLocalStorage<{
       a: string;
-    }>({ getSessionId: () => 'session-id' });
+    }>({ getSessionId: () => 'session-id', items: { a: {} } });
 
     expect(localStore.get('a')).toBe('hello');
   });
@@ -89,7 +107,7 @@ describe('session id', () => {
   test('delete scoped item', () => {
     const localStore = createSmartLocalStorage<{
       a: string;
-    }>({ getSessionId: () => 'session-id' });
+    }>({ getSessionId: () => 'session-id', items: { a: {} } });
 
     localStore.set('a', 'hello');
 
@@ -104,7 +122,10 @@ describe('session id', () => {
 
     const localStore = createSmartLocalStorage<{
       a: string;
-    }>({ getSessionId: () => sessionId });
+    }>({
+      getSessionId: () => sessionId,
+      items: { a: {} },
+    });
 
     localStore.set('a', 'hello');
 
@@ -146,8 +167,9 @@ describe('session id', () => {
       b: string;
     }>({
       getSessionId: () => 'session-id',
-      itemsOptions: {
+      items: {
         a: { ignoreSessionId: true },
+        b: {},
       },
     });
 
@@ -174,9 +196,11 @@ describe('session id', () => {
       d: string;
     }>({
       getSessionId: () => sessionId,
-      itemsOptions: {
+      items: {
         c: { ignoreSessionId: true },
         d: { useSessionStorage: true },
+        b: {},
+        a: {},
       },
     });
 
@@ -190,9 +214,12 @@ describe('session id', () => {
 
     localStore.set('d', 'hello4');
 
+    mockedLocalStorage.storage.setItem('external-key', 'hello');
+
     expect(getStorageItems()).toMatchInlineSnapshot(`
       {
         "local": {
+          "external-key": "hello",
           "slsm-new-session-id||b": ""hello2"",
           "slsm-session-id||a": ""hello"",
           "slsm||c": ""hello3"",
@@ -207,7 +234,9 @@ describe('session id', () => {
 
     expect(getStorageItems()).toMatchInlineSnapshot(`
       {
-        "local": {},
+        "local": {
+          "external-key": "hello",
+        },
         "session": {},
       }
     `);
@@ -227,9 +256,11 @@ describe('session id', () => {
       d: string;
     }>({
       getSessionId: () => sessionId,
-      itemsOptions: {
+      items: {
         c: { ignoreSessionId: true },
         d: { useSessionStorage: true },
+        b: {},
+        a: {},
       },
     });
 
@@ -295,7 +326,11 @@ test('item validation', () => {
   {
     const localStore = createSmartLocalStorage<{
       a: string;
-    }>();
+    }>({
+      items: {
+        a: {},
+      },
+    });
 
     localStore.set('a', 'hello');
   }
@@ -304,7 +339,7 @@ test('item validation', () => {
     const localStore = createSmartLocalStorage<{
       a: number;
     }>({
-      itemsOptions: {
+      items: {
         a: {
           validate: (value) => (typeof value === 'number' ? value : undefined),
         },
@@ -324,7 +359,7 @@ describe('item with sessionStorage', () => {
     const localStore = createSmartLocalStorage<{
       a: string;
     }>({
-      itemsOptions: {
+      items: {
         a: {
           useSessionStorage: true,
         },
@@ -350,10 +385,11 @@ describe('item with sessionStorage', () => {
       a: string;
       b: string;
     }>({
-      itemsOptions: {
+      items: {
         a: {
           useSessionStorage: true,
         },
+        b: {},
       },
     });
 
@@ -378,7 +414,11 @@ describe('item with sessionStorage', () => {
 test('invalidate key on storage event', () => {
   const localStore = createSmartLocalStorage<{
     a: string;
-  }>();
+  }>({
+    items: {
+      a: {},
+    },
+  });
 
   localStore.set('a', 'hello');
 
@@ -396,10 +436,15 @@ test('recover from max quota reached', () => {
     e: string;
     session: string;
   }>({
-    itemsOptions: {
+    items: {
       session: {
         useSessionStorage: true,
       },
+      a: {},
+      b: {},
+      c: {},
+      d: {},
+      e: {},
     },
   });
 
@@ -489,7 +534,7 @@ test('auto prune', () => {
   const localStore = createSmartLocalStorage<{
     items: number[];
   }>({
-    itemsOptions: {
+    items: {
       items: {
         autoPrune: (value) => {
           if (value.length > 4) {
@@ -515,4 +560,40 @@ test('auto prune', () => {
   });
 
   expect(localStore.get('items')).toEqual([8, 9, 10, 11]);
+});
+
+test.concurrent('auto prune deleted items', () => {
+  {
+    const localStore = createSmartLocalStorage<{
+      items: number[];
+      willBeDeleted: number[];
+    }>({
+      items: {
+        items: {},
+        willBeDeleted: {},
+      },
+    });
+
+    localStore.set('items', [1, 2, 3]);
+    localStore.set('willBeDeleted', [4, 5, 6]);
+  }
+
+  {
+    const _localStore = createSmartLocalStorage<{
+      items: number[];
+    }>({
+      items: {
+        items: {},
+      },
+    });
+
+    expect(getStorageItems()).toMatchInlineSnapshot(`
+      {
+        "local": {
+          "slsm||items": "[1,2,3]",
+        },
+        "session": {},
+      }
+    `);
+  }
 });

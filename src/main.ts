@@ -10,8 +10,8 @@ type ItemOptions<V> = {
 
 type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
   getSessionId?: () => string | false;
-  itemsOptions?: {
-    [K in keyof Schemas]?: ItemOptions<Schemas[K]>;
+  items: {
+    [K in keyof Schemas]: ItemOptions<Schemas[K]>;
   };
 };
 
@@ -43,8 +43,8 @@ export function createSmartLocalStorage<
   Schemas extends Record<string, unknown>,
 >({
   getSessionId = () => '',
-  itemsOptions,
-}: SmartLocalStorageOptions<Schemas> = {}): SmartLocalStorage<Schemas> {
+  items,
+}: SmartLocalStorageOptions<Schemas>): SmartLocalStorage<Schemas> {
   type Items = keyof Schemas;
 
   type Store = {
@@ -60,23 +60,40 @@ export function createSmartLocalStorage<
     state: {},
   });
 
+  requestIdleCallback(() => {
+    function cleanStorage(storage: Storage) {
+      for (const storageKey of getStorageItemKeys(storage)) {
+        const itemKey = storageKey.split('||')[1];
+
+        if (itemKey) {
+          const isConfigured = !!items[itemKey];
+
+          if (!isConfigured) {
+            localStorage.removeItem(storageKey);
+          }
+        }
+      }
+    }
+
+    cleanStorage(localStorage);
+    cleanStorage(sessionStorage);
+  });
+
   function getItemStorage(key: Items) {
-    return itemsOptions?.[key]?.useSessionStorage ?
-        sessionStorage
-      : localStorage;
+    return items[key].useSessionStorage ? sessionStorage : localStorage;
   }
 
   function getLocalStorageItemKey(key: Items) {
-    const itemOptions = itemsOptions?.[key];
+    const itemOptions = items[key];
 
-    const usesDefaultSessionId = itemOptions?.ignoreSessionId;
+    const usesDefaultSessionId = itemOptions.ignoreSessionId;
 
     const sessionId = usesDefaultSessionId ? '' : getSessionId();
 
     if (sessionId === false) return false;
 
     return `slsm${sessionId ? `-${sessionId}` : ''}${
-      itemOptions?.useSessionStorage ? ':s' : ''
+      itemOptions.useSessionStorage ? ':s' : ''
     }||${String(key)}`;
   }
 
@@ -155,11 +172,11 @@ export function createSmartLocalStorage<
 
     if (!itemKey) return;
 
-    const itemOptions = itemsOptions?.[key];
+    const itemOptions = items[key];
 
     let finalValue = isFunction(value) ? value(getValue(key)) : value;
 
-    if (itemOptions?.autoPrune) {
+    if (itemOptions.autoPrune) {
       finalValue = itemOptions.autoPrune(finalValue);
     }
 
@@ -177,7 +194,7 @@ export function createSmartLocalStorage<
 
     if (!stateItem) return;
 
-    const itemOptions = itemsOptions?.[stateItem.key];
+    const itemOptions = items[stateItem.key];
 
     if (event.newValue === null) {
       valuesStore.setKey(storeKey, undefined);
@@ -186,7 +203,7 @@ export function createSmartLocalStorage<
 
     let itemValueParsed = safeJsonParse(event.newValue);
 
-    if (itemOptions?.validate) {
+    if (itemOptions.validate) {
       itemValueParsed = itemOptions.validate(itemValueParsed);
     }
 
@@ -214,11 +231,11 @@ export function createSmartLocalStorage<
 
     if (itemValue === null) return;
 
-    const itemOptions = itemsOptions?.[key];
+    const itemOptions = items[key];
 
     let itemValueParsed = safeJsonParse(itemValue) as Schemas[K] | undefined;
 
-    if (itemOptions?.validate) {
+    if (itemOptions.validate) {
       itemValueParsed = itemOptions.validate(itemValueParsed);
     }
 
@@ -336,4 +353,12 @@ function safeJsonParse(value: string) {
     console.error('[slsm] error parsing value', error);
     return;
   }
+}
+
+function requestIdleCallback(callback: () => void) {
+  if ('requestIdleCallback' in globalThis) {
+    globalThis.requestIdleCallback(callback);
+  }
+
+  setTimeout(callback, 50);
 }
