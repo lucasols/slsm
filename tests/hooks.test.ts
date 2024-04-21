@@ -2,6 +2,7 @@
 
 import { act, renderHook } from '@testing-library/react';
 import { useCallback } from 'react';
+import { rc_number, rc_object, rc_string } from 'runcheck';
 import { beforeEach, expect, test } from 'vitest';
 import { createSmartLocalStorage } from '../src/main.js';
 import { mockEnv } from './utils.js';
@@ -17,7 +18,9 @@ test('useKey', () => {
     a: string;
   }>({
     items: {
-      a: {},
+      a: {
+        schema: rc_string,
+      },
     },
   });
 
@@ -45,7 +48,7 @@ test('useKey with selector', () => {
     a: { b: string; c: number };
   }>({
     items: {
-      a: {},
+      a: { schema: rc_object({ b: rc_string, c: rc_number }) },
     },
   });
 
@@ -73,7 +76,7 @@ test('useKey with selector and useExternalDeps', () => {
     a: { b: string; c: number };
   }>({
     items: {
-      a: {},
+      a: { schema: rc_object({ b: rc_string, c: rc_number }) },
     },
   });
 

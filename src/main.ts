@@ -1,25 +1,18 @@
 import { produce } from 'immer';
+import { RcType, rc_parse_json } from 'runcheck';
 import { Store } from 't-state';
 
-type ItemOptions<V, RequireValidation extends boolean> = {
+type ItemOptions<V> = {
+  schema: RcType<V>;
   ignoreSessionId?: boolean;
   useSessionStorage?: boolean;
   autoPrune?: (value: V) => V;
-} & (RequireValidation extends true ?
-  {
-    validate: (value: unknown) => V | undefined;
-  }
-: {
-    validate?: (value: unknown) => V | undefined;
-  });
+};
 
-type SmartLocalStorageOptions<
-  Schemas extends Record<string, unknown>,
-  RequireValidation extends boolean,
-> = {
+type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
   getSessionId?: () => string | false;
   items: {
-    [K in keyof Schemas]: ItemOptions<Schemas[K], RequireValidation>;
+    [K in keyof Schemas]: ItemOptions<Schemas[K]>;
   };
 };
 
@@ -53,14 +46,10 @@ type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
 
 export function createSmartLocalStorage<
   Schemas extends Record<string, unknown>,
-  RequireValidation extends boolean = false,
 >({
   getSessionId = () => '',
   items,
-}: SmartLocalStorageOptions<
-  Schemas,
-  RequireValidation
->): SmartLocalStorage<Schemas> {
+}: SmartLocalStorageOptions<Schemas>): SmartLocalStorage<Schemas> {
   type Items = keyof Schemas;
 
   type Store = {
@@ -217,10 +206,11 @@ export function createSmartLocalStorage<
       return;
     }
 
-    let itemValueParsed = safeJsonParse(event.newValue);
+    const validationResult = rc_parse_json(event.newValue, itemOptions.schema);
 
-    if (itemOptions.validate) {
-      itemValueParsed = itemOptions.validate(itemValueParsed);
+    if (validationResult.error) {
+      console.error('[slsm] error parsing value', validationResult.error);
+      return;
     }
 
     valuesStore.produceState((draft) => {
@@ -228,7 +218,7 @@ export function createSmartLocalStorage<
 
       if (!storeItem) return;
 
-      storeItem.value = itemValueParsed;
+      storeItem.value = validationResult.value;
     });
   });
 
@@ -249,18 +239,22 @@ export function createSmartLocalStorage<
 
     const itemOptions = items[key];
 
-    let itemValueParsed = safeJsonParse(itemValue) as Schemas[K] | undefined;
+    const validationResult = rc_parse_json(itemValue, itemOptions.schema);
 
-    if (itemOptions.validate) {
-      itemValueParsed = itemOptions.validate(itemValueParsed);
+    let finalValue: Schemas[K] | undefined = undefined;
+
+    if (validationResult.error) {
+      console.error('[slsm] error parsing value', validationResult.error);
+    } else {
+      finalValue = validationResult.value;
     }
 
     valuesStore.setKey(itemKey, {
       key,
-      value: itemValueParsed,
+      value: finalValue,
     });
 
-    return itemValueParsed;
+    return finalValue;
   }
 
   return {
@@ -370,15 +364,6 @@ function getStorageItemKeys(storage: Storage, except?: string) {
 
 function isFunction(value: unknown): value is (...args: any[]) => any {
   return typeof value === 'function';
-}
-
-function safeJsonParse(value: string) {
-  try {
-    return JSON.parse(value);
-  } catch (error) {
-    console.error('[slsm] error parsing value', error);
-    return;
-  }
 }
 
 function requestIdleCallback(callback: () => void) {

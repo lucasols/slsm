@@ -1,3 +1,4 @@
+import { rc_array, rc_number, rc_string } from 'runcheck';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { createSmartLocalStorage } from '../src/main.js';
 import { mockEnv } from './utils.js';
@@ -16,7 +17,7 @@ test('set and read a value in store', () => {
     a: string;
   }>({
     items: {
-      a: {},
+      a: { schema: rc_string },
     },
   });
 
@@ -34,7 +35,7 @@ test('get value from store that is set in localStorage', () => {
     a: string;
   }>({
     items: {
-      a: {},
+      a: { schema: rc_string },
     },
   });
 
@@ -46,7 +47,7 @@ test('produce value', () => {
     a: string[];
   }>({
     items: {
-      a: {},
+      a: { schema: rc_array(rc_string) },
     },
   });
 
@@ -70,7 +71,7 @@ test('delete value', () => {
     a: string;
   }>({
     items: {
-      a: {},
+      a: { schema: rc_string },
     },
   });
 
@@ -86,7 +87,10 @@ describe('session id', () => {
   test('store item scoped to session id', () => {
     const localStore = createSmartLocalStorage<{
       a: string;
-    }>({ getSessionId: () => 'session-id', items: { a: {} } });
+    }>({
+      getSessionId: () => 'session-id',
+      items: { a: { schema: rc_string } },
+    });
 
     localStore.set('a', 'hello');
 
@@ -99,7 +103,12 @@ describe('session id', () => {
 
     const localStore = createSmartLocalStorage<{
       a: string;
-    }>({ getSessionId: () => 'session-id', items: { a: {} } });
+    }>({
+      getSessionId: () => 'session-id',
+      items: {
+        a: { schema: rc_string },
+      },
+    });
 
     expect(localStore.get('a')).toBe('hello');
   });
@@ -107,7 +116,10 @@ describe('session id', () => {
   test('delete scoped item', () => {
     const localStore = createSmartLocalStorage<{
       a: string;
-    }>({ getSessionId: () => 'session-id', items: { a: {} } });
+    }>({
+      getSessionId: () => 'session-id',
+      items: { a: { schema: rc_string } },
+    });
 
     localStore.set('a', 'hello');
 
@@ -124,7 +136,7 @@ describe('session id', () => {
       a: string;
     }>({
       getSessionId: () => sessionId,
-      items: { a: {} },
+      items: { a: { schema: rc_string } },
     });
 
     localStore.set('a', 'hello');
@@ -168,8 +180,8 @@ describe('session id', () => {
     }>({
       getSessionId: () => 'session-id',
       items: {
-        a: { ignoreSessionId: true },
-        b: {},
+        a: { ignoreSessionId: true, schema: rc_string },
+        b: { schema: rc_string },
       },
     });
 
@@ -198,11 +210,15 @@ describe('session id', () => {
     }>({
       getSessionId: () => sessionId,
       items: {
-        c: { ignoreSessionId: true },
-        d: { useSessionStorage: true },
-        b: {},
-        a: {},
-        e: { useSessionStorage: true, ignoreSessionId: true },
+        c: { ignoreSessionId: true, schema: rc_string },
+        d: { useSessionStorage: true, schema: rc_string },
+        b: { schema: rc_string },
+        a: { schema: rc_string },
+        e: {
+          useSessionStorage: true,
+          ignoreSessionId: true,
+          schema: rc_string,
+        },
       },
     });
 
@@ -262,10 +278,10 @@ describe('session id', () => {
     }>({
       getSessionId: () => sessionId,
       items: {
-        c: { ignoreSessionId: true },
-        d: { useSessionStorage: true },
-        b: {},
-        a: {},
+        c: { ignoreSessionId: true, schema: rc_string },
+        d: { useSessionStorage: true, schema: rc_string },
+        b: { schema: rc_string },
+        a: { schema: rc_string },
       },
     });
 
@@ -344,11 +360,15 @@ describe('session id', () => {
     }>({
       getSessionId: () => sessionId,
       items: {
-        c: { ignoreSessionId: true },
-        d: { useSessionStorage: true },
-        b: {},
-        a: {},
-        e: { useSessionStorage: true, ignoreSessionId: true },
+        c: { ignoreSessionId: true, schema: rc_string },
+        d: { useSessionStorage: true, schema: rc_string },
+        b: { schema: rc_string },
+        a: { schema: rc_string },
+        e: {
+          useSessionStorage: true,
+          ignoreSessionId: true,
+          schema: rc_string,
+        },
       },
     });
 
@@ -403,7 +423,7 @@ test('item validation', () => {
       a: string;
     }>({
       items: {
-        a: {},
+        a: { schema: rc_string },
       },
     });
 
@@ -415,9 +435,7 @@ test('item validation', () => {
       a: number;
     }>({
       items: {
-        a: {
-          validate: (value) => (typeof value === 'number' ? value : undefined),
-        },
+        a: { schema: rc_number },
       },
     });
 
@@ -437,6 +455,7 @@ describe('item with sessionStorage', () => {
       items: {
         a: {
           useSessionStorage: true,
+          schema: rc_string,
         },
       },
     });
@@ -463,8 +482,9 @@ describe('item with sessionStorage', () => {
       items: {
         a: {
           useSessionStorage: true,
+          schema: rc_string,
         },
-        b: {},
+        b: { schema: rc_string },
       },
     });
 
@@ -491,7 +511,7 @@ test('invalidate key on storage event', () => {
     a: string;
   }>({
     items: {
-      a: {},
+      a: { schema: rc_string },
     },
   });
 
@@ -514,12 +534,13 @@ test('recover from max quota reached', () => {
     items: {
       session: {
         useSessionStorage: true,
+        schema: rc_string,
       },
-      a: {},
-      b: {},
-      c: {},
-      d: {},
-      e: {},
+      a: { schema: rc_string },
+      b: { schema: rc_string },
+      c: { schema: rc_string },
+      d: { schema: rc_string },
+      e: { schema: rc_string },
     },
   });
 
@@ -611,6 +632,7 @@ test('auto prune', () => {
   }>({
     items: {
       items: {
+        schema: rc_array(rc_number),
         autoPrune: (value) => {
           if (value.length > 4) {
             return value.slice(-4);
@@ -644,8 +666,12 @@ test.concurrent('auto prune deleted items', () => {
       willBeDeleted: number[];
     }>({
       items: {
-        items: {},
-        willBeDeleted: {},
+        items: {
+          schema: rc_array(rc_number),
+        },
+        willBeDeleted: {
+          schema: rc_array(rc_number),
+        },
       },
     });
 
@@ -658,7 +684,9 @@ test.concurrent('auto prune deleted items', () => {
       items: number[];
     }>({
       items: {
-        items: {},
+        items: {
+          schema: rc_array(rc_number),
+        },
       },
     });
 
