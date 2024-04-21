@@ -1,17 +1,25 @@
 import { produce } from 'immer';
 import { Store } from 't-state';
 
-type ItemOptions<V> = {
+type ItemOptions<V, RequireValidation extends boolean> = {
   ignoreSessionId?: boolean;
   useSessionStorage?: boolean;
-  validate?: (value: unknown) => V | undefined;
   autoPrune?: (value: V) => V;
-};
+} & (RequireValidation extends true ?
+  {
+    validate: (value: unknown) => V | undefined;
+  }
+: {
+    validate?: (value: unknown) => V | undefined;
+  });
 
-type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
+type SmartLocalStorageOptions<
+  Schemas extends Record<string, unknown>,
+  RequireValidation extends boolean,
+> = {
   getSessionId?: () => string | false;
   items: {
-    [K in keyof Schemas]: ItemOptions<Schemas[K]>;
+    [K in keyof Schemas]: ItemOptions<Schemas[K], RequireValidation>;
   };
 };
 
@@ -45,10 +53,14 @@ type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
 
 export function createSmartLocalStorage<
   Schemas extends Record<string, unknown>,
+  RequireValidation extends boolean = false,
 >({
   getSessionId = () => '',
   items,
-}: SmartLocalStorageOptions<Schemas>): SmartLocalStorage<Schemas> {
+}: SmartLocalStorageOptions<
+  Schemas,
+  RequireValidation
+>): SmartLocalStorage<Schemas> {
   type Items = keyof Schemas;
 
   type Store = {
