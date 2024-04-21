@@ -17,7 +17,7 @@
   "files": [
     "dist"
   ],
-  "repository": "github:lucasols/lsmanager",
+  "repository": "github:lucasols/slsm",
   "author": "Lucas Santos",
   "type": "module",
   "main": "./dist/main.cjs",
