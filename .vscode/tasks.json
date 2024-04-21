@@ -1,0 +1,39 @@
+{
+  // See https://go.microsoft.com/fwlink/?LinkId=733558
+  // for the documentation about the tasks.json format
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "run tests",
+      "type": "npm",
+      "script": "test"
+    },
+    {
+      "label": "bump version and deploy",
+      "type": "shell",
+      "command": "pnpm pre-publish && pnpm version ${input:version} && pnpm publish",
+      "problemMatcher": []
+    },
+    {
+      "label": "run lint",
+      "type": "npm",
+      "script": "lint",
+      "presentation": {
+        "clear": true
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "fileName",
+      "type": "promptString",
+      "description": "Enter the file name"
+    },
+    {
+      "id": "version",
+      "type": "pickString",
+      "description": "Select version type",
+      "options": ["minor", "patch", "major"]
+    }
+  ]
+}

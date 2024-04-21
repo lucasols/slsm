@@ -1,0 +1,63 @@
+{
+  "name": "slsm",
+  "description": "A smart local storage manager",
+  "version": "0.4.0",
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest --ui",
+    "test:run": "vitest run",
+    "lint": "pnpm tsc && pnpm eslint",
+    "tsc": "tsc -p tsconfig.prod.json",
+    "eslint": "CI=true eslint src/ --color --max-warnings=0",
+    "build": "pnpm test:run && pnpm lint && pnpm build:no-test",
+    "build:no-test": "tsup",
+    "build-test": "tsup --config tsup.test.config.ts",
+    "pre-publish": "./scripts/check-if-is-sync.sh && pnpm build"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": "github:lucasols/lsmanager",
+  "author": "Lucas Santos",
+  "type": "module",
+  "main": "./dist/main.cjs",
+  "module": "./dist/main.js",
+  "types": "./dist/main.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/main.js",
+      "require": "./dist/main.cjs"
+    }
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=21.5.0"
+  },
+  "devDependencies": {
+    "@lucasols/eslint-plugin-extended-lint": "^1.6.0",
+    "@lucasols/utils": "^4.23.2",
+    "@types/eslint": "^8.56.10",
+    "@types/eslint__js": "^8.42.3",
+    "@types/node": "^20.12.7",
+    "@typescript-eslint/eslint-plugin": "^7.7.0",
+    "@typescript-eslint/parser": "^7.7.0",
+    "@vitest/ui": "^1.5.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-vitest": "^0.5.3",
+    "prettier": "3.2.5",
+    "prettier-plugin-organize-imports": "^3.2.4",
+    "tsm": "^2.3.0",
+    "tsup": "^8.0.2",
+    "typescript": "5.4.5",
+    "vite": "^5.2.10",
+    "vitest": "^1.5.0"
+  },
+  "dependencies": {
+    "happy-dom": "^14.7.1",
+    "immer": "^10.0.4",
+    "t-state": "^9.0.0"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  }
+}
