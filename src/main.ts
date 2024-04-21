@@ -5,6 +5,7 @@ type ItemOptions<V> = {
   ignoreSessionId?: boolean;
   useSessionStorage?: boolean;
   validate?: (value: unknown) => V | undefined;
+  autoPrune?: (value: V) => V;
 };
 
 type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
@@ -29,6 +30,13 @@ type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
 
   clearAll: () => void;
   clearAllBySessionId: (sessionId: string | false) => void;
+  useKey: <K extends keyof Schemas>(key: K) => Schemas[K] | undefined;
+  useKeyWithSelector: <K extends keyof Schemas>(
+    key: K,
+  ) => <S>(
+    selector: (value: Schemas[K] | undefined) => S,
+    usesExternalDeps?: boolean,
+  ) => S;
 };
 
 export function createSmartLocalStorage<
@@ -72,6 +80,73 @@ export function createSmartLocalStorage<
     }||${String(key)}`;
   }
 
+  function deleteItemByStorageKey(storageKey: string) {
+    sessionStorage.removeItem(storageKey);
+    localStorage.removeItem(storageKey);
+
+    valuesStore.setKey(storageKey, undefined);
+  }
+
+  function setItemValueInStore(
+    storageKey: string,
+    key: Items,
+    finalValue: any,
+    itemStorage: Storage,
+  ) {
+    try {
+      itemStorage.setItem(storageKey, JSON.stringify(finalValue));
+    } catch (error) {
+      if (
+        error instanceof DOMException &&
+        error.name === 'QuotaExceededError'
+      ) {
+        const sessionStorageKeys = getStorageItemKeys(
+          sessionStorage,
+          storageKey,
+        );
+
+        if (sessionStorageKeys.length !== 0) {
+          for (const itemKey of sessionStorageKeys) {
+            deleteItemByStorageKey(itemKey);
+          }
+
+          setItemValueInStore(storageKey, key, finalValue, itemStorage);
+          return;
+        }
+
+        let largestItemSize = 0;
+        let largestItemKey = '';
+
+        const localStorageKeys = getStorageItemKeys(localStorage, storageKey);
+
+        if (localStorageKeys.length !== 0) {
+          for (const itemKey of localStorageKeys) {
+            const itemSize = localStorage.getItem(itemKey)?.length ?? 0;
+
+            if (itemSize > largestItemSize) {
+              largestItemSize = itemSize;
+              largestItemKey = itemKey;
+            }
+          }
+
+          localStorage.removeItem(largestItemKey);
+
+          setItemValueInStore(storageKey, key, finalValue, itemStorage);
+          return;
+        }
+
+        throw error;
+      }
+
+      throw error;
+    }
+
+    valuesStore.setKey(storageKey, {
+      key,
+      value: finalValue,
+    });
+  }
+
   function setItemValue<K extends Items>(
     key: K,
     value: ValueOrSetter<Schemas[K]>,
@@ -80,46 +155,48 @@ export function createSmartLocalStorage<
 
     if (!itemKey) return;
 
-    const finalValue = isFunction(value) ? value(getValue(key)) : value;
+    const itemOptions = itemsOptions?.[key];
+
+    let finalValue = isFunction(value) ? value(getValue(key)) : value;
+
+    if (itemOptions?.autoPrune) {
+      finalValue = itemOptions.autoPrune(finalValue);
+    }
 
     const itemStorage = getItemStorage(key);
 
-    itemStorage.setItem(itemKey, JSON.stringify(finalValue));
-    valuesStore.setKey(itemKey, {
-      key,
-      value: finalValue,
-    });
+    setItemValueInStore(itemKey, key, finalValue, itemStorage);
   }
 
   globalThis.addEventListener('storage', (event) => {
-    if (event.key?.startsWith('slsm')) {
-      const storeKey = event.key;
+    if (!event.key?.startsWith('slsm')) return;
 
-      const stateItem = valuesStore.state[storeKey];
+    const storeKey = event.key;
 
-      if (stateItem) {
-        const itemOptions = itemsOptions?.[stateItem.key];
+    const stateItem = valuesStore.state[storeKey];
 
-        if (event.newValue === null) {
-          valuesStore.setKey(storeKey, undefined);
-          return;
-        }
+    if (!stateItem) return;
 
-        let itemValueParsed = safeJsonParse(event.newValue);
+    const itemOptions = itemsOptions?.[stateItem.key];
 
-        if (itemOptions?.validate) {
-          itemValueParsed = itemOptions.validate(itemValueParsed);
-        }
-
-        valuesStore.produceState((draft) => {
-          const storeItem = draft[storeKey];
-
-          if (!storeItem) return;
-
-          storeItem.value = itemValueParsed;
-        });
-      }
+    if (event.newValue === null) {
+      valuesStore.setKey(storeKey, undefined);
+      return;
     }
+
+    let itemValueParsed = safeJsonParse(event.newValue);
+
+    if (itemOptions?.validate) {
+      itemValueParsed = itemOptions.validate(itemValueParsed);
+    }
+
+    valuesStore.produceState((draft) => {
+      const storeItem = draft[storeKey];
+
+      if (!storeItem) return;
+
+      storeItem.value = itemValueParsed;
+    });
   });
 
   function getValue<K extends Items>(key: K): Schemas[K] | undefined {
@@ -207,14 +284,38 @@ export function createSmartLocalStorage<
         }
       }
     },
+
+    useKey: (key) => {
+      const itemKey = getLocalStorageItemKey(key);
+
+      if (!itemKey) return;
+
+      return valuesStore.useSelector((state) => state[itemKey]?.value) as any;
+    },
+
+    useKeyWithSelector: (key) => {
+      return function useSelector(selector, useExternalDeps) {
+        const itemKey = getLocalStorageItemKey(key);
+
+        if (!itemKey) return;
+
+        return valuesStore.useSelector(
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+          (state) => selector(state[itemKey]?.value as any),
+          { useExternalDeps },
+        ) as any;
+      };
+    },
   };
 }
 
-function getStorageItemKeys(storage: Storage) {
+function getStorageItemKeys(storage: Storage, except?: string) {
   const keys: string[] = [];
 
   for (let i = 0; i < storage.length; i++) {
     const key = storage.key(i);
+
+    if (key === except) continue;
 
     if (key?.startsWith('slsm')) {
       keys.push(key);

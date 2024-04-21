@@ -1,76 +1,12 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { beforeEach, describe, expect, test } from 'vitest';
 import { createSmartLocalStorage } from '../src/main.js';
+import { mockEnv } from './utils.js';
 
-let storageEventListeners: ((event: StorageEvent) => void)[] = [];
-
-function createStorage() {
-  let items: Record<string, string | null> = {};
-
-  const storage: Storage = {
-    getItem: (key) => items[key] ?? null,
-    setItem: (key, value) => {
-      items[key] = value;
-    },
-    removeItem: (key: string) => {
-      delete items[key];
-    },
-    clear: () => {
-      items = {};
-    },
-    get length() {
-      return Object.keys(items).length;
-    },
-    key(index) {
-      return Object.keys(items)[index] ?? null;
-    },
-  };
-
-  return {
-    storage,
-    get items() {
-      return items;
-    },
-    mockExternalChange: (key: string, value: string | null) => {
-      const oldValue = items[key];
-
-      items[key] = value;
-
-      storageEventListeners.forEach((callback) => {
-        const event: Pick<
-          StorageEvent,
-          'key' | 'newValue' | 'oldValue' | 'storageArea'
-        > = {
-          key,
-          newValue: value,
-          oldValue: oldValue ?? null,
-          storageArea: storage,
-        };
-
-        callback(event as StorageEvent);
-      });
-    },
-  };
-}
-
-const mockedLocalStorage = createStorage();
-const mockedSessionStorage = createStorage();
-
-vi.stubGlobal('localStorage', mockedLocalStorage.storage);
-vi.stubGlobal('sessionStorage', mockedSessionStorage.storage);
-
-vi.stubGlobal(
-  'addEventListener',
-  (eventName: string, callback: (event: StorageEvent) => void) => {
-    if (eventName === 'storage') {
-      storageEventListeners.push(callback);
-    }
-  },
-);
+const { getStorageItems, reset, mockQuota, getBytes, mockedLocalStorage } =
+  mockEnv();
 
 beforeEach(() => {
-  localStorage.clear();
-  sessionStorage.clear();
-  storageEventListeners = [];
+  reset();
 });
 
 test('set and read a value in store', () => {
@@ -180,10 +116,13 @@ describe('session id', () => {
 
     expect(localStore.get('a')).toBe('hello2');
 
-    expect(mockedLocalStorage.items).toMatchInlineSnapshot(`
+    expect(getStorageItems()).toMatchInlineSnapshot(`
       {
-        "slsm-new-session-id||a": ""hello2"",
-        "slsm-session-id||a": ""hello"",
+        "local": {
+          "slsm-new-session-id||a": ""hello2"",
+          "slsm-session-id||a": ""hello"",
+        },
+        "session": {},
       }
     `);
 
@@ -191,9 +130,12 @@ describe('session id', () => {
 
     localStore.delete('a');
 
-    expect(mockedLocalStorage.items).toMatchInlineSnapshot(`
+    expect(getStorageItems()).toMatchInlineSnapshot(`
       {
-        "slsm-new-session-id||a": ""hello2"",
+        "local": {
+          "slsm-new-session-id||a": ""hello2"",
+        },
+        "session": {},
       }
     `);
   });
@@ -212,10 +154,13 @@ describe('session id', () => {
     localStore.set('a', 'hello');
     localStore.set('b', 'hello2');
 
-    expect(mockedLocalStorage.items).toMatchInlineSnapshot(`
+    expect(getStorageItems()).toMatchInlineSnapshot(`
       {
-        "slsm-session-id||b": ""hello2"",
-        "slsm||a": ""hello"",
+        "local": {
+          "slsm-session-id||b": ""hello2"",
+          "slsm||a": ""hello"",
+        },
+        "session": {},
       }
     `);
   });
@@ -245,27 +190,27 @@ describe('session id', () => {
 
     localStore.set('d', 'hello4');
 
-    expect(mockedLocalStorage.items).toMatchInlineSnapshot(`
+    expect(getStorageItems()).toMatchInlineSnapshot(`
       {
-        "slsm-new-session-id||b": ""hello2"",
-        "slsm-session-id||a": ""hello"",
-        "slsm||c": ""hello3"",
-      }
-    `);
-
-    expect(mockedSessionStorage.items).toMatchInlineSnapshot(`
-      {
-        "slsm-new-session-id:s||d": ""hello4"",
+        "local": {
+          "slsm-new-session-id||b": ""hello2"",
+          "slsm-session-id||a": ""hello"",
+          "slsm||c": ""hello3"",
+        },
+        "session": {
+          "slsm-new-session-id:s||d": ""hello4"",
+        },
       }
     `);
 
     localStore.clearAll();
 
-    expect(mockedLocalStorage.items).toMatchInlineSnapshot(`
-      {}
+    expect(getStorageItems()).toMatchInlineSnapshot(`
+      {
+        "local": {},
+        "session": {},
+      }
     `);
-
-    expect(mockedSessionStorage.items).toMatchInlineSnapshot(`{}`);
 
     expect(localStore.get('a')).toBeUndefined();
     expect(localStore.get('b')).toBeUndefined();
@@ -304,16 +249,15 @@ describe('session id', () => {
 
     localStore.clearAllBySessionId('new-session-id');
 
-    expect(mockedLocalStorage.items).toMatchInlineSnapshot(`
+    expect(getStorageItems()).toMatchInlineSnapshot(`
       {
-        "slsm-session-id||a": ""hello"",
-        "slsm||c": ""hello3"",
-      }
-    `);
-
-    expect(mockedSessionStorage.items).toMatchInlineSnapshot(`
-      {
-        "slsm-session-id:s||d": ""hello4"",
+        "local": {
+          "slsm-session-id||a": ""hello"",
+          "slsm||c": ""hello3"",
+        },
+        "session": {
+          "slsm-session-id:s||d": ""hello4"",
+        },
       }
     `);
 
@@ -323,21 +267,25 @@ describe('session id', () => {
 
     localStore.clearAllBySessionId('session-id');
 
-    expect(mockedLocalStorage.items).toMatchInlineSnapshot(`
+    expect(getStorageItems()).toMatchInlineSnapshot(`
       {
-        "slsm||c": ""hello3"",
+        "local": {
+          "slsm||c": ""hello3"",
+        },
+        "session": {},
       }
     `);
-
-    expect(mockedSessionStorage.items).toMatchInlineSnapshot(`{}`);
 
     localStore.set('a', 'hello');
 
     localStore.clearAllBySessionId(false);
 
-    expect(mockedLocalStorage.items).toMatchInlineSnapshot(`
+    expect(getStorageItems()).toMatchInlineSnapshot(`
       {
-        "slsm-new-session-id||a": ""hello"",
+        "local": {
+          "slsm-new-session-id||a": ""hello"",
+        },
+        "session": {},
       }
     `);
   });
@@ -387,10 +335,12 @@ describe('item with sessionStorage', () => {
 
     expect(localStore.get('a')).toBe('hello');
 
-    expect(mockedLocalStorage.items).toMatchInlineSnapshot(`{}`);
-    expect(mockedSessionStorage.items).toMatchInlineSnapshot(`
+    expect(getStorageItems()).toMatchInlineSnapshot(`
       {
-        "slsm:s||a": ""hello"",
+        "local": {},
+        "session": {
+          "slsm:s||a": ""hello"",
+        },
       }
     `);
   });
@@ -414,12 +364,14 @@ describe('item with sessionStorage', () => {
 
     expect(localStore.get('a')).toBeUndefined();
 
-    expect(mockedLocalStorage.items).toMatchInlineSnapshot(`
+    expect(getStorageItems()).toMatchInlineSnapshot(`
       {
-        "slsm||b": ""hello2"",
+        "local": {
+          "slsm||b": ""hello2"",
+        },
+        "session": {},
       }
     `);
-    expect(mockedSessionStorage.items).toMatchInlineSnapshot(`{}`);
   });
 });
 
@@ -430,13 +382,137 @@ test('invalidate key on storage event', () => {
 
   localStore.set('a', 'hello');
 
-  mockedLocalStorage.mockExternalChange('slsm||a', 'hello2');
+  mockedLocalStorage.mockExternalChange('slsm||a', '"world"');
 
-  expect(localStore.get('a')).toBe('hello2');
+  expect(localStore.get('a')).toBe('world');
 });
 
-// FIX: sync multiple tabs
-// FIX: auto prune
-// FIX: recover from max quota reached
-// FIX: useKey
-// FIX: useKeyWith selector
+test('recover from max quota reached', () => {
+  const localStore = createSmartLocalStorage<{
+    a: string;
+    b: string;
+    c: string;
+    d: string;
+    e: string;
+    session: string;
+  }>({
+    itemsOptions: {
+      session: {
+        useSessionStorage: true,
+      },
+    },
+  });
+
+  function getItemsInStores() {
+    return {
+      local: Object.keys(getStorageItems().local),
+      session: Object.keys(getStorageItems().session),
+      size: getBytes(),
+    };
+  }
+
+  mockQuota(900);
+
+  localStore.set('a', 'hello'.repeat(30));
+
+  localStore.set('b', 'hello'.repeat(30));
+
+  localStore.set('c', 'hello'.repeat(30));
+  localStore.set('d', 'hello'.repeat(30));
+
+  localStore.set('session', 'hello'.repeat(10));
+
+  expect(getItemsInStores()).toMatchInlineSnapshot(`
+    {
+      "local": [
+        "slsm||a",
+        "slsm||b",
+        "slsm||c",
+        "slsm||d",
+      ],
+      "session": [
+        "slsm:s||session",
+      ],
+      "size": 745,
+    }
+  `);
+
+  localStore.set('e', 'hello'.repeat(40));
+
+  // clean session items and try to set `e` again
+  expect(getItemsInStores()).toMatchInlineSnapshot(`
+    {
+      "local": [
+        "slsm||a",
+        "slsm||b",
+        "slsm||c",
+        "slsm||d",
+        "slsm||e",
+      ],
+      "session": [],
+      "size": 888,
+    }
+  `);
+
+  localStore.set('e', 'hello'.repeat(60));
+
+  // remove local items until there is available space
+  expect(getItemsInStores()).toMatchInlineSnapshot(`
+    {
+      "local": [
+        "slsm||b",
+        "slsm||c",
+        "slsm||d",
+        "slsm||e",
+      ],
+      "session": [],
+      "size": 821,
+    }
+  `);
+
+  localStore.set('a', 'hello'.repeat(110));
+
+  // remove session items until there is available space
+  expect(getItemsInStores()).toMatchInlineSnapshot(`
+    {
+      "local": [
+        "slsm||d",
+        "slsm||a",
+      ],
+      "session": [],
+      "size": 737,
+    }
+  `);
+});
+
+test('auto prune', () => {
+  const localStore = createSmartLocalStorage<{
+    items: number[];
+  }>({
+    itemsOptions: {
+      items: {
+        autoPrune: (value) => {
+          if (value.length > 4) {
+            return value.slice(-4);
+          }
+
+          return value;
+        },
+      },
+    },
+  });
+
+  localStore.set('items', [1, 2, 3]);
+
+  expect(localStore.get('items')).toEqual([1, 2, 3]);
+
+  localStore.set('items', [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+  expect(localStore.get('items')).toEqual([7, 8, 9, 10]);
+
+  localStore.produce('items', [], (draft) => {
+    draft.push(11);
+  });
+
+  expect(localStore.get('items')).toEqual([8, 9, 10, 11]);
+});
