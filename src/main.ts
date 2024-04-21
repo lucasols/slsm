@@ -29,7 +29,11 @@ type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
   delete: <K extends keyof Schemas>(key: K) => void;
 
   clearAll: () => void;
-  clearAllBySessionId: (sessionId: string | false) => void;
+  clearAllBy: (clearBy: {
+    sessionId?: string;
+    allSessionIds?: boolean;
+    withNoSessionId?: boolean;
+  }) => void;
   useKey: <K extends keyof Schemas>(key: K) => Schemas[K] | undefined;
   useKeyWithSelector: <K extends keyof Schemas>(
     key: K,
@@ -93,7 +97,7 @@ export function createSmartLocalStorage<
     if (sessionId === false) return false;
 
     return `slsm${sessionId ? `-${sessionId}` : ''}${
-      itemOptions.useSessionStorage ? ':s' : ''
+      itemOptions.useSessionStorage ? '|s' : ''
     }||${String(key)}`;
   }
 
@@ -281,25 +285,35 @@ export function createSmartLocalStorage<
       }
     },
 
-    clearAllBySessionId: (sessionId) => {
-      for (const key of getStorageItemKeys(localStorage)) {
-        const shouldRemove =
-          sessionId === false ?
-            key.startsWith(`slsm||`)
-          : key.startsWith(`slsm-${sessionId}`);
+    clearAllBy: ({ sessionId, allSessionIds, withNoSessionId }) => {
+      valuesStore.batch(() => {
+        function removeKeyFromStorage(key: string, storage: Storage) {
+          let shouldRemove = false;
 
-        if (shouldRemove) {
-          valuesStore.setKey(key, undefined);
-          localStorage.removeItem(key);
-        }
-      }
+          const hasSessionId = !key.startsWith(`slsm|`);
 
-      for (const key of getStorageItemKeys(sessionStorage)) {
-        if (key.startsWith(`slsm-${sessionId}`)) {
-          valuesStore.setKey(key, undefined);
-          sessionStorage.removeItem(key);
+          if (withNoSessionId) {
+            shouldRemove = !hasSessionId;
+          } else if (allSessionIds) {
+            shouldRemove = hasSessionId;
+          } else if (sessionId) {
+            shouldRemove = hasSessionId && key.startsWith(`slsm-${sessionId}`);
+          }
+
+          if (shouldRemove) {
+            valuesStore.setKey(key, undefined);
+            storage.removeItem(key);
+          }
         }
-      }
+
+        for (const key of getStorageItemKeys(localStorage)) {
+          removeKeyFromStorage(key, localStorage);
+        }
+
+        for (const key of getStorageItemKeys(sessionStorage)) {
+          removeKeyFromStorage(key, sessionStorage);
+        }
+      });
     },
 
     useKey: (key) => {

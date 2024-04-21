@@ -194,6 +194,7 @@ describe('session id', () => {
       b: string;
       c: string;
       d: string;
+      e: string;
     }>({
       getSessionId: () => sessionId,
       items: {
@@ -201,6 +202,7 @@ describe('session id', () => {
         d: { useSessionStorage: true },
         b: {},
         a: {},
+        e: { useSessionStorage: true, ignoreSessionId: true },
       },
     });
 
@@ -214,6 +216,8 @@ describe('session id', () => {
 
     localStore.set('d', 'hello4');
 
+    localStore.set('e', 'hello5');
+
     mockedLocalStorage.storage.setItem('external-key', 'hello');
 
     expect(getStorageItems()).toMatchInlineSnapshot(`
@@ -225,7 +229,8 @@ describe('session id', () => {
           "slsm||c": ""hello3"",
         },
         "session": {
-          "slsm-new-session-id:s||d": ""hello4"",
+          "slsm-new-session-id|s||d": ""hello4"",
+          "slsm|s||e": ""hello5"",
         },
       }
     `);
@@ -278,7 +283,9 @@ describe('session id', () => {
 
     localStore.set('d', 'hello4');
 
-    localStore.clearAllBySessionId('new-session-id');
+    localStore.clearAllBy({
+      sessionId: 'new-session-id',
+    });
 
     expect(getStorageItems()).toMatchInlineSnapshot(`
       {
@@ -287,7 +294,7 @@ describe('session id', () => {
           "slsm||c": ""hello3"",
         },
         "session": {
-          "slsm-session-id:s||d": ""hello4"",
+          "slsm-session-id|s||d": ""hello4"",
         },
       }
     `);
@@ -296,7 +303,9 @@ describe('session id', () => {
     expect(localStore.get('b')).toBeUndefined();
     expect(localStore.get('c')).toBe('hello3');
 
-    localStore.clearAllBySessionId('session-id');
+    localStore.clearAllBy({
+      sessionId: 'session-id',
+    });
 
     expect(getStorageItems()).toMatchInlineSnapshot(`
       {
@@ -309,7 +318,9 @@ describe('session id', () => {
 
     localStore.set('a', 'hello');
 
-    localStore.clearAllBySessionId(false);
+    localStore.clearAllBy({
+      withNoSessionId: true,
+    });
 
     expect(getStorageItems()).toMatchInlineSnapshot(`
       {
@@ -317,6 +328,70 @@ describe('session id', () => {
           "slsm-new-session-id||a": ""hello"",
         },
         "session": {},
+      }
+    `);
+  });
+
+  test('clear all session ids', () => {
+    let sessionId = 'session-id';
+
+    const localStore = createSmartLocalStorage<{
+      a: string;
+      b: string;
+      c: string;
+      d: string;
+      e: string;
+    }>({
+      getSessionId: () => sessionId,
+      items: {
+        c: { ignoreSessionId: true },
+        d: { useSessionStorage: true },
+        b: {},
+        a: {},
+        e: { useSessionStorage: true, ignoreSessionId: true },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    sessionId = 'new-session-id';
+
+    localStore.set('b', 'hello2');
+
+    localStore.set('c', 'hello3');
+
+    sessionId = 'new-session-id-2';
+
+    localStore.set('d', 'hello4');
+
+    localStore.set('e', 'hello5');
+
+    expect(getStorageItems()).toMatchInlineSnapshot(`
+      {
+        "local": {
+          "slsm-new-session-id||b": ""hello2"",
+          "slsm-session-id||a": ""hello"",
+          "slsm||c": ""hello3"",
+        },
+        "session": {
+          "slsm-new-session-id-2|s||d": ""hello4"",
+          "slsm|s||e": ""hello5"",
+        },
+      }
+    `);
+
+    localStore.clearAllBy({
+      allSessionIds: true,
+    });
+
+    expect(getStorageItems()).toMatchInlineSnapshot(`
+      {
+        "local": {
+          "slsm||c": ""hello3"",
+        },
+        "session": {
+          "slsm|s||e": ""hello5"",
+        },
       }
     `);
   });
@@ -374,7 +449,7 @@ describe('item with sessionStorage', () => {
       {
         "local": {},
         "session": {
-          "slsm:s||a": ""hello"",
+          "slsm|s||a": ""hello"",
         },
       }
     `);
@@ -476,7 +551,7 @@ test('recover from max quota reached', () => {
         "slsm||d",
       ],
       "session": [
-        "slsm:s||session",
+        "slsm|s||session",
       ],
       "size": 745,
     }
