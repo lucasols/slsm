@@ -1,5 +1,5 @@
-# Light fsm
+# slsm (Smart Local Storage Manager)
 
-A lightweight finite state machine library for typescript based on t-state
+A lightweight and smart local storage manager for typescript based on t-state
 
-TODO: Write dcoumentation here
+TODO: Write documentation here
