@@ -253,7 +253,10 @@ export function createSmartLocalStorage<
     });
   });
 
-  function getValue<K extends Items>(key: K): Schemas[K] | undefined {
+  function getValue<K extends Items>(
+    key: K,
+    delayStoreUpdate?: boolean,
+  ): Schemas[K] | undefined {
     const itemKey = getLocalStorageItemKey(key);
 
     if (!itemKey) return;
@@ -280,10 +283,16 @@ export function createSmartLocalStorage<
       finalValue = validationResult.value;
     }
 
-    valuesStore.setKey(itemKey, {
-      key,
-      value: finalValue,
-    });
+    if (delayStoreUpdate) {
+      queueMicrotask(() => {
+        valuesStore.setKey(itemKey, { key, value: finalValue });
+      });
+    } else {
+      valuesStore.setKey(itemKey, {
+        key,
+        value: finalValue,
+      });
+    }
 
     return finalValue;
   }
@@ -377,7 +386,7 @@ export function createSmartLocalStorage<
         const value = state[itemKey]?.value;
 
         if (value === undefined) {
-          const valueFromStorage = getValue(key);
+          const valueFromStorage = getValue(key, true);
 
           return valueFromStorage;
         } else {
@@ -400,7 +409,7 @@ export function createSmartLocalStorage<
                 | undefined;
 
               if (valueFromState === undefined) {
-                const valueFromStorage = getValue(key);
+                const valueFromStorage = getValue(key, true);
 
                 return valueFromStorage;
               } else {
