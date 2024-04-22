@@ -137,13 +137,15 @@ export function createSmartLocalStorage<
           return;
         }
 
-        let largestItemSize = 0;
-        let largestItemKey = '';
+        const currentSessionId = getSessionId();
 
         const localStorageKeys = getStorageItemKeys(localStorage, storageKey);
 
-        if (localStorageKeys.length !== 0) {
-          for (const itemKey of localStorageKeys) {
+        function checkLargestItem(itemsToCheck: string[]) {
+          let largestItemSize = 0;
+          let largestItemKey = '';
+
+          for (const itemKey of itemsToCheck) {
             const itemSize = localStorage.getItem(itemKey)?.length ?? 0;
 
             if (itemSize > largestItemSize) {
@@ -152,10 +154,35 @@ export function createSmartLocalStorage<
             }
           }
 
-          localStorage.removeItem(largestItemKey);
+          return largestItemKey || null;
+        }
 
-          setItemValueInStore(storageKey, key, finalValue, itemStorage);
-          return;
+        if (localStorageKeys.length !== 0) {
+          const itemsInDifferentSessions = localStorageKeys.filter(
+            (itemKey) =>
+              !itemKey.startsWith(`slsm-${currentSessionId}`) &&
+              !itemKey.startsWith(`slsm|`),
+          );
+
+          const largestItemKeyInDifferentSessions = checkLargestItem(
+            itemsInDifferentSessions,
+          );
+
+          if (largestItemKeyInDifferentSessions) {
+            localStorage.removeItem(largestItemKeyInDifferentSessions);
+
+            setItemValueInStore(storageKey, key, finalValue, itemStorage);
+            return;
+          } else {
+            const largestItemKey = checkLargestItem(localStorageKeys);
+
+            if (largestItemKey) {
+              localStorage.removeItem(largestItemKey);
+
+              setItemValueInStore(storageKey, key, finalValue, itemStorage);
+              return;
+            }
+          }
         }
 
         throw error;
