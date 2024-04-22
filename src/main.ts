@@ -20,6 +20,7 @@ type ValueOrSetter<T> = T | ((currentValue: T | undefined) => T);
 
 type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
   set: <K extends keyof Schemas>(key: K, value: Schemas[K]) => void;
+  setUncheckedValue: (key: string, value: unknown) => void;
   get: <K extends keyof Schemas>(key: K) => Schemas[K] | undefined;
   produce: <K extends keyof Schemas>(
     key: K,
@@ -257,9 +258,24 @@ export function createSmartLocalStorage<
     return finalValue;
   }
 
+  function setUnknownValue(key: string, value: unknown) {
+    const itemOptions = items[key];
+    if (itemOptions) {
+      const validationResult = rc_parse_json(value, itemOptions.schema);
+
+      if (validationResult.error) {
+        console.error('[slsm] error parsing value', validationResult.error);
+        return;
+      }
+
+      setItemValue(key, validationResult.value);
+    }
+  }
+
   return {
     set: setItemValue,
     get: getValue,
+    setUncheckedValue: setUnknownValue,
 
     produce: (key, initialValue, recipe) => {
       setItemValue(key, (currentValue) =>
