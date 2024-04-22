@@ -66,6 +66,25 @@ test('produce value', () => {
   expect(localStorage.getItem('slsm||a')).toBe('["hello","world"]');
 });
 
+test('set with setter function', () => {
+  const localStore = createSmartLocalStorage<{
+    a: string[];
+  }>({
+    items: {
+      a: { schema: rc_array(rc_string) },
+    },
+  });
+
+  localStore.set('a', (currentValue) => [...(currentValue ?? []), 'hello']);
+
+  expect(localStore.get('a')).toEqual(['hello']);
+
+  localStore.set('a', (currentValue) => [...(currentValue ?? []), 'world']);
+
+  expect(localStore.get('a')).toEqual(['hello', 'world']);
+  expect(localStorage.getItem('slsm||a')).toBe('["hello","world"]');
+});
+
 test('delete value', () => {
   const localStore = createSmartLocalStorage<{
     a: string;

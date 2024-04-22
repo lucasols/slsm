@@ -19,7 +19,10 @@ type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
 type ValueOrSetter<T> = T | ((currentValue: T | undefined) => T);
 
 type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
-  set: <K extends keyof Schemas>(key: K, value: Schemas[K]) => void;
+  set: <K extends keyof Schemas>(
+    key: K,
+    value: ValueOrSetter<Schemas[K]>,
+  ) => void;
   setUnknownValue: (key: string, value: unknown) => void;
   get: <K extends keyof Schemas>(key: K) => Schemas[K] | undefined;
   produce: <K extends keyof Schemas>(
