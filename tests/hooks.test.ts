@@ -104,3 +104,39 @@ test('useKey with selector and useExternalDeps', () => {
 
   expect(result.current).toBe(3);
 });
+
+test('useKey load value previously set', () => {
+  const localStore = createSmartLocalStorage<{
+    a: string;
+  }>({
+    items: {
+      a: { schema: rc_string },
+    },
+  });
+
+  mockedLocalStorage.storage.setItem('slsm||a', '"hello"');
+
+  const { result } = renderHook(() => {
+    return localStore.useKey('a');
+  });
+
+  expect(result.current).toBe('hello');
+});
+
+test('useKey with selector load value previously set', () => {
+  const localStore = createSmartLocalStorage<{
+    a: { b: string; c: number };
+  }>({
+    items: {
+      a: { schema: rc_object({ b: rc_string, c: rc_number }) },
+    },
+  });
+
+  mockedLocalStorage.storage.setItem('slsm||a', '{"b":"hello","c":1}');
+
+  const { result } = renderHook(() => {
+    return localStore.useKeyWithSelector('a')((value) => value?.b);
+  });
+
+  expect(result.current).toBe('hello');
+});

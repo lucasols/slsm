@@ -369,22 +369,47 @@ export function createSmartLocalStorage<
     },
 
     useKey: (key) => {
-      const itemKey = getLocalStorageItemKey(key);
+      return valuesStore.useSelector((state) => {
+        const itemKey = getLocalStorageItemKey(key);
 
-      if (!itemKey) return;
+        if (!itemKey) return undefined;
 
-      return valuesStore.useSelector((state) => state[itemKey]?.value) as any;
+        const value = state[itemKey]?.value;
+
+        if (value === undefined) {
+          const valueFromStorage = getValue(key);
+
+          return valueFromStorage;
+        } else {
+          return value;
+        }
+      }) as any;
     },
 
     useKeyWithSelector: (key) => {
       return function useSelector(selector, useExternalDeps) {
-        const itemKey = getLocalStorageItemKey(key);
-
-        if (!itemKey) return;
-
         return valuesStore.useSelector(
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-          (state) => selector(state[itemKey]?.value as any),
+          (state) => {
+            const value = (() => {
+              const itemKey = getLocalStorageItemKey(key);
+
+              if (!itemKey) return;
+
+              const valueFromState = state[itemKey]?.value as
+                | Schemas[typeof key]
+                | undefined;
+
+              if (valueFromState === undefined) {
+                const valueFromStorage = getValue(key);
+
+                return valueFromStorage;
+              } else {
+                return valueFromState;
+              }
+            })();
+
+            return selector(value);
+          },
           { useExternalDeps },
         ) as any;
       };
