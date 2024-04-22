@@ -20,7 +20,7 @@ type ValueOrSetter<T> = T | ((currentValue: T | undefined) => T);
 
 type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
   set: <K extends keyof Schemas>(key: K, value: Schemas[K]) => void;
-  setUncheckedValue: (key: string, value: unknown) => void;
+  setUnknownValue: (key: string, value: unknown) => void;
   get: <K extends keyof Schemas>(key: K) => Schemas[K] | undefined;
   produce: <K extends keyof Schemas>(
     key: K,
@@ -275,7 +275,7 @@ export function createSmartLocalStorage<
   return {
     set: setItemValue,
     get: getValue,
-    setUncheckedValue: setUnknownValue,
+    setUnknownValue,
 
     produce: (key, initialValue, recipe) => {
       setItemValue(key, (currentValue) =>
