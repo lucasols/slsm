@@ -720,7 +720,7 @@ test.concurrent('auto prune deleted items', () => {
   }
 });
 
-test('bug: set values freezes the the input references', () => {
+test('bug: store keeps reference of set values', () => {
   const localStore = createSmartLocalStorage<{
     a: string[];
   }>({
