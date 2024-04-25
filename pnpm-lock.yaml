@@ -11,6 +11,9 @@ dependencies:
   immer:
     specifier: ^10.0.4
     version: 10.0.4
+  klona:
+    specifier: ^2.0.6
+    version: 2.0.6
   runcheck:
     specifier: ^0.66.0
     version: 0.66.0
@@ -2283,6 +2286,11 @@ packages:
     dependencies:
       json-buffer: 3.0.1
     dev: true
+
+  /klona@2.0.6:
+    resolution: {integrity: sha512-dhG34DXATL5hSxJbIexCft8FChFXtmskoZYnoPWjXQuebWYCNkVeV3KkGegCK9CP1oswI/vQibS2GY7Em/sJJA==}
+    engines: {node: '>= 8'}
+    dev: false
 
   /levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}

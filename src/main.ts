@@ -1,4 +1,5 @@
 import { produce } from 'immer';
+import { klona } from 'klona';
 import { RcType, rc_parse_json } from 'runcheck';
 import { Store } from 't-state';
 
@@ -196,7 +197,7 @@ export function createSmartLocalStorage<
 
     valuesStore.setKey(storageKey, {
       key,
-      value: finalValue,
+      value: klona(finalValue),
     });
   }
 

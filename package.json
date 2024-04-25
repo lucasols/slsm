@@ -59,6 +59,7 @@
   "dependencies": {
     "happy-dom": "^14.7.1",
     "immer": "^10.0.4",
+    "klona": "^2.0.6",
     "runcheck": "^0.66.0",
     "t-state": "^9.0.0"
   },

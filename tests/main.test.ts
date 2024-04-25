@@ -719,3 +719,23 @@ test.concurrent('auto prune deleted items', () => {
     `);
   }
 });
+
+test('bug: set values freezes the the input references', () => {
+  const localStore = createSmartLocalStorage<{
+    a: string[];
+  }>({
+    items: {
+      a: { schema: rc_array(rc_string) },
+    },
+  });
+
+  const array = ['hello'];
+
+  localStore.set('a', array);
+
+  array.unshift('world', '!');
+
+  array.push('!');
+
+  expect(localStore.get('a')).toEqual(['hello']);
+});
