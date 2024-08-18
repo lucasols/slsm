@@ -276,13 +276,12 @@ export function createSmartLocalStorage<
 
     const validationResult = rc_parse_json(itemValue, itemOptions.schema);
 
-    let finalValue: Schemas[K] | undefined = undefined;
-
     if (validationResult.error) {
-      console.error('[slsm] error parsing value', validationResult.error);
-    } else {
-      finalValue = validationResult.value;
+      console.error('[slsm] error parsing value', validationResult.errors);
+      return undefined;
     }
+
+    const finalValue: Schemas[K] | undefined = validationResult.value;
 
     if (delayStoreUpdate) {
       queueMicrotask(() => {

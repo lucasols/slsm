@@ -140,3 +140,35 @@ test('useKey with selector load value previously set', () => {
 
   expect(result.current).toBe('hello');
 });
+
+test(
+  'useKey with error parsing value',
+  {
+    timeout: 100,
+  },
+  () => {
+    mockedLocalStorage.storage.setItem('slsm||a', '2');
+
+    const localStore = createSmartLocalStorage<{
+      a: string;
+    }>({
+      items: {
+        a: { schema: rc_string },
+      },
+    });
+
+    let rerenderCount = 0;
+
+    expect(() => {
+      renderHook(() => {
+        rerenderCount++;
+
+        if (rerenderCount > 100) {
+          throw new Error('Too many rerenders');
+        }
+
+        return localStore.useKey('a');
+      });
+    }).not.toThrow();
+  },
+);
