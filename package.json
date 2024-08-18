@@ -1,7 +1,7 @@
 {
   "name": "slsm",
   "description": "A smart local storage manager",
-  "version": "0.11.4",
+  "version": "0.11.5",
   "license": "MIT",
   "scripts": {
     "test": "vitest --ui",
