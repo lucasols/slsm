@@ -739,3 +739,30 @@ test('bug: store keeps reference of set values', () => {
 
   expect(localStore.get('a')).toEqual(['hello']);
 });
+
+test('bug: set a item with a value that exceeds the quota', () => {
+  mockQuota(900);
+
+  const localStore = createSmartLocalStorage<{
+    a: string;
+    b: string;
+    c: string;
+    d: string;
+    e: string;
+  }>({
+    items: {
+      a: { schema: rc_string },
+      b: { schema: rc_string },
+      c: { schema: rc_string },
+      d: { schema: rc_string },
+      e: { schema: rc_string },
+    },
+  });
+
+  localStore.set('a', 'hello'.repeat(10));
+  localStore.set('b', 'hello'.repeat(10));
+
+  expect(() => {
+    localStore.set('c', 'hello'.repeat(1000));
+  }).toThrowError();
+});
