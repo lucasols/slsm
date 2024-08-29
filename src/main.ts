@@ -417,6 +417,7 @@ export function createSmartLocalStorage<
 
             return selector(value);
           },
+          // eslint-disable-next-line @lucasols/extended-lint/exhaustive-deps
           [key, selector],
         );
 
