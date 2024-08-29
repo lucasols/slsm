@@ -1,5 +1,6 @@
 import { produce } from 'immer';
 import { klona } from 'klona';
+import { useCallback } from 'react';
 import { RcType, rc_parse_json } from 'runcheck';
 import { Store } from 't-state';
 
@@ -43,10 +44,7 @@ type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
   useKey: <K extends keyof Schemas>(key: K) => Schemas[K] | undefined;
   useKeyWithSelector: <K extends keyof Schemas>(
     key: K,
-  ) => <S>(
-    selector: (value: Schemas[K] | undefined) => S,
-    usesExternalDeps?: boolean,
-  ) => S;
+  ) => <S>(selector: (value: Schemas[K] | undefined) => S) => S;
 };
 
 export function createSmartLocalStorage<
@@ -240,8 +238,8 @@ export function createSmartLocalStorage<
 
     const validationResult = rc_parse_json(event.newValue, itemOptions.schema);
 
-    if (validationResult.error) {
-      console.error('[slsm] error parsing value', validationResult.error);
+    if (validationResult.errors) {
+      console.error('[slsm] error parsing value', validationResult.errors);
       return;
     }
 
@@ -396,9 +394,9 @@ export function createSmartLocalStorage<
     },
 
     useKeyWithSelector: (key) => {
-      return function useSelector(selector, useExternalDeps) {
-        return valuesStore.useSelector(
-          (state) => {
+      return function useSelector(selector) {
+        const cb = useCallback(
+          (state: Store) => {
             const value = (() => {
               const itemKey = getLocalStorageItemKey(key);
 
@@ -419,8 +417,10 @@ export function createSmartLocalStorage<
 
             return selector(value);
           },
-          { useExternalDeps },
-        ) as any;
+          [key, selector],
+        );
+
+        return valuesStore.useSelector(cb, { useExternalDeps: true }) as any;
       };
     },
   };
