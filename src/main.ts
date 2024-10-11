@@ -19,11 +19,17 @@ type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
 };
 
 type ValueOrSetter<T> = T | ((currentValue: T | undefined) => T);
+type Setter<T> = (currentValue: T) => T;
 
 type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
   set: <K extends keyof Schemas>(
     key: K,
     value: ValueOrSetter<Schemas[K]>,
+  ) => void;
+  setWithDefault: <K extends keyof Schemas>(
+    key: K,
+    defaultValue: Schemas[K],
+    setter: Setter<Schemas[K]>,
   ) => void;
   setUnknownValue: (key: string, value: unknown) => void;
   get: <K extends keyof Schemas>(key: K) => Schemas[K] | undefined;
@@ -202,14 +208,27 @@ export function createSmartLocalStorage<
   function setItemValue<K extends Items>(
     key: K,
     value: ValueOrSetter<Schemas[K]>,
-  ) {
+  ): void;
+  function setItemValue<K extends Items>(
+    key: K,
+    value: Setter<Schemas[K]>,
+    defaultValue: Schemas[K],
+  ): void;
+  function setItemValue<K extends Items>(
+    key: K,
+    value: ValueOrSetter<Schemas[K]> | Setter<Schemas[K]>,
+    defaultValue?: Schemas[K],
+  ): void {
     const itemKey = getLocalStorageItemKey(key);
 
     if (!itemKey) return;
 
     const itemOptions = items[key];
 
-    let finalValue = isFunction(value) ? value(getValue(key)) : value;
+    const currentValue = getValue(key) ?? defaultValue;
+
+    let finalValue =
+      isFunction(value) ? value(currentValue as Schemas[K]) : value;
 
     if (itemOptions.autoPrune) {
       finalValue = itemOptions.autoPrune(finalValue);
@@ -220,37 +239,42 @@ export function createSmartLocalStorage<
     setItemValueInStore(itemKey, key, finalValue, itemStorage);
   }
 
-  globalThis.addEventListener('storage', (event) => {
-    if (!event.key?.startsWith('slsm')) return;
+  if ('addEventListener' in globalThis) {
+    globalThis.addEventListener('storage', (event) => {
+      if (!event.key?.startsWith('slsm')) return;
 
-    const storeKey = event.key;
+      const storeKey = event.key;
 
-    const stateItem = valuesStore.state[storeKey];
+      const stateItem = valuesStore.state[storeKey];
 
-    if (!stateItem) return;
+      if (!stateItem) return;
 
-    const itemOptions = items[stateItem.key];
+      const itemOptions = items[stateItem.key];
 
-    if (event.newValue === null) {
-      valuesStore.setKey(storeKey, undefined);
-      return;
-    }
+      if (event.newValue === null) {
+        valuesStore.setKey(storeKey, undefined);
+        return;
+      }
 
-    const validationResult = rc_parse_json(event.newValue, itemOptions.schema);
+      const validationResult = rc_parse_json(
+        event.newValue,
+        itemOptions.schema,
+      );
 
-    if (validationResult.errors) {
-      console.error('[slsm] error parsing value', validationResult.errors);
-      return;
-    }
+      if (validationResult.errors) {
+        console.error('[slsm] error parsing value', validationResult.errors);
+        return;
+      }
 
-    valuesStore.produceState((draft) => {
-      const storeItem = draft[storeKey];
+      valuesStore.produceState((draft) => {
+        const storeItem = draft[storeKey];
 
-      if (!storeItem) return;
+        if (!storeItem) return;
 
-      storeItem.value = validationResult.value;
+        storeItem.value = validationResult.value;
+      });
     });
-  });
+  }
 
   function getValue<K extends Items>(
     key: K,
@@ -311,6 +335,9 @@ export function createSmartLocalStorage<
 
   return {
     set: setItemValue,
+    setWithDefault: (key, defaultValue, value) => {
+      setItemValue(key, value, defaultValue);
+    },
     get: getValue,
     setUnknownValue,
 

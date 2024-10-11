@@ -1,4 +1,4 @@
-import { rc_array, rc_number, rc_string } from 'runcheck';
+import { rc_array, rc_boolean, rc_number, rc_string } from 'runcheck';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { createSmartLocalStorage } from '../src/main.js';
 import { mockEnv } from './utils.js';
@@ -765,4 +765,20 @@ test('bug: set a item with a value that exceeds the quota', () => {
   expect(() => {
     localStore.set('c', 'hello'.repeat(1000));
   }).toThrowError();
+});
+
+test('set with default value', () => {
+  const localStore = createSmartLocalStorage<{
+    a: boolean;
+    b: boolean;
+  }>({
+    items: {
+      a: { schema: rc_boolean },
+      b: { schema: rc_boolean },
+    },
+  });
+
+  localStore.setWithDefault('a', true, (currentValue) => !currentValue);
+
+  expect(localStore.get('a')).toBe(false);
 });
