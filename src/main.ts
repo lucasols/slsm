@@ -4,6 +4,8 @@ import { useCallback } from 'react';
 import { RcType, rc_parse_json } from 'runcheck';
 import { Store } from 't-state';
 
+const IS_BROWSER = typeof window !== 'undefined';
+
 type ItemOptions<V> = {
   schema: RcType<V>;
   ignoreSessionId?: boolean;
@@ -75,6 +77,8 @@ export function createSmartLocalStorage<
   });
 
   requestIdleCallback(() => {
+    if (!IS_BROWSER) return;
+
     function cleanStorage(storage: Storage) {
       for (const storageKey of getStorageItemKeys(storage)) {
         const itemKey = storageKey.split('||')[1];
@@ -239,7 +243,7 @@ export function createSmartLocalStorage<
     setItemValueInStore(itemKey, key, finalValue, itemStorage);
   }
 
-  if ('addEventListener' in globalThis) {
+  if (IS_BROWSER) {
     globalThis.addEventListener('storage', (event) => {
       if (!event.key?.startsWith('slsm')) return;
 
