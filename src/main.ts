@@ -129,7 +129,9 @@ export function createSmartLocalStorage<
     itemStorage: Storage,
   ) {
     try {
-      itemStorage.setItem(storageKey, JSON.stringify(finalValue));
+      if (IS_BROWSER) {
+        itemStorage.setItem(storageKey, JSON.stringify(finalValue));
+      }
     } catch (error) {
       if (
         error instanceof DOMException &&
