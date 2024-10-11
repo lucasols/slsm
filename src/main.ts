@@ -4,8 +4,6 @@ import { useCallback } from 'react';
 import { RcType, rc_parse_json } from 'runcheck';
 import { Store } from 't-state';
 
-const IS_BROWSER = typeof window !== 'undefined';
-
 type ItemOptions<V> = {
   schema: RcType<V>;
   ignoreSessionId?: boolean;
@@ -61,6 +59,8 @@ export function createSmartLocalStorage<
   getSessionId = () => '',
   items,
 }: SmartLocalStorageOptions<Schemas>): SmartLocalStorage<Schemas> {
+  const IS_BROWSER = typeof localStorage !== 'undefined';
+
   type Items = keyof Schemas;
 
   type Store = {
