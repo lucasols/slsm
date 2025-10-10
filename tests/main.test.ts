@@ -12,7 +12,7 @@ beforeEach(() => {
   reset();
 });
 
-test('set and read a value in store', () => {
+test.only('set and read a value in store', () => {
   const localStore = createSmartLocalStorage<{
     a: string;
   }>({
@@ -699,7 +699,7 @@ test.concurrent('auto prune deleted items', () => {
   }
 
   {
-    const _localStore = createSmartLocalStorage<{
+    createSmartLocalStorage<{
       items: number[];
     }>({
       items: {

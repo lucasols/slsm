@@ -1,3 +1,7 @@
+/* eslint-disable @ls-stack/require-description -- will be handled later */
+/* eslint-disable @typescript-eslint/consistent-type-assertions */
+/* eslint-disable @typescript-eslint/no-unsafe-return */
+import { isFunction } from '@lucasols/utils/assertions';
 import { produce } from 'immer';
 import { klona } from 'klona';
 import { useCallback } from 'react';
@@ -6,6 +10,7 @@ import { Store } from 't-state';
 
 type ItemOptions<V> = {
   schema: RcType<V>;
+  syncTabsState?: boolean;
   ignoreSessionId?: boolean;
   useSessionStorage?: boolean;
   autoPrune?: (value: V) => V;
@@ -59,7 +64,7 @@ export function createSmartLocalStorage<
   getSessionId = () => '',
   items,
 }: SmartLocalStorageOptions<Schemas>): SmartLocalStorage<Schemas> {
-  const IS_BROWSER = typeof localStorage !== 'undefined';
+  const IS_BROWSER = typeof window !== 'undefined';
 
   type Items = keyof Schemas;
 
@@ -67,7 +72,7 @@ export function createSmartLocalStorage<
     [storeKey: string]:
       | {
           key: Items;
-          value: unknown;
+          value: Schemas[Items];
         }
       | undefined;
   };
@@ -450,7 +455,6 @@ export function createSmartLocalStorage<
 
             return selector(value);
           },
-          // eslint-disable-next-line @lucasols/extended-lint/exhaustive-deps
           [key, selector],
         );
 
@@ -474,10 +478,6 @@ function getStorageItemKeys(storage: Storage, except?: string) {
   }
 
   return keys;
-}
-
-function isFunction(value: unknown): value is (...args: any[]) => any {
-  return typeof value === 'function';
 }
 
 function requestIdleCallback(callback: () => void) {

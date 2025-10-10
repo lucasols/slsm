@@ -46,7 +46,9 @@ export function mockEnv() {
     let items: Record<string, string | null> = {};
 
     const storage: Storage = {
-      getItem: (key) => items[key] ?? null,
+      getItem: (key) => {
+        return items[key] ?? null;
+      },
       setItem: (key, value) => {
         checkQuotaError(type, key, value);
 
@@ -77,7 +79,7 @@ export function mockEnv() {
 
         items[key] = value;
 
-        storageEventListeners.forEach((callback) => {
+        for (const callback of storageEventListeners) {
           const event: Pick<
             StorageEvent,
             'key' | 'newValue' | 'oldValue' | 'storageArea'
@@ -88,8 +90,9 @@ export function mockEnv() {
             storageArea: storage,
           };
 
+          // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- this is fine here
           callback(event as StorageEvent);
-        });
+        }
       },
     };
   }
@@ -99,6 +102,10 @@ export function mockEnv() {
 
   vi.stubGlobal('localStorage', mockedLocalStorage.storage);
   vi.stubGlobal('sessionStorage', mockedSessionStorage.storage);
+  vi.stubGlobal('window', {
+    localStorage: mockedLocalStorage.storage,
+    sessionStorage: mockedSessionStorage.storage,
+  });
 
   vi.stubGlobal(
     'addEventListener',
