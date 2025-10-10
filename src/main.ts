@@ -1,7 +1,8 @@
 /* eslint-disable @ls-stack/require-description -- will be handled later */
 /* eslint-disable @typescript-eslint/consistent-type-assertions */
-import { isFunction } from '@lucasols/utils/assertions';
 import { sortBy } from '@lucasols/utils/arrayUtils';
+import { isFunction } from '@lucasols/utils/assertions';
+import { deepEqual } from '@lucasols/utils/deepEqual';
 import { klona } from 'klona';
 import { RcType, rc_parse_json } from 'runcheck';
 import { Store } from 't-state';
@@ -280,7 +281,7 @@ export function createSmartLocalStorage<
     storageKey: string,
   ) {
     const store = getStore(key);
-    store.setState(klona(value));
+    store.setState(klona(value), { equalityCheck: deepEqual });
 
     const itemStorage = getItemStorage(key);
     writeToStorage(storageKey, value, itemStorage);
