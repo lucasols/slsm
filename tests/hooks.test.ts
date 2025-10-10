@@ -18,10 +18,7 @@ test('useKey', () => {
     a: string;
   }>({
     items: {
-      a: {
-        schema: rc_string,
-        syncTabsState: true,
-      },
+      a: { schema: rc_string, default: '', syncTabsState: true },
     },
   });
 
@@ -29,7 +26,7 @@ test('useKey', () => {
     return localStore.useKey('a');
   });
 
-  expect(result.current).toBe(undefined);
+  expect(result.current).toBe('');
 
   act(() => {
     localStore.set('a', 'hello');
@@ -51,6 +48,7 @@ test('useKey with selector', () => {
     items: {
       a: {
         schema: rc_object({ b: rc_string, c: rc_number }),
+        default: { b: '', c: 0 },
         syncTabsState: true,
       },
     },
@@ -58,11 +56,11 @@ test('useKey with selector', () => {
 
   const { result } = renderHook(() => {
     return localStore.useKeyWithSelector('a')(
-      useCallback((value) => value?.b, []),
+      useCallback((value) => value.b, []),
     );
   });
 
-  expect(result.current).toBe(undefined);
+  expect(result.current).toBe('');
 
   act(() => {
     localStore.set('a', { b: 'hello', c: 1 });
@@ -82,14 +80,17 @@ test('useKey with selector with external deps', () => {
     a: { b: string; c: number };
   }>({
     items: {
-      a: { schema: rc_object({ b: rc_string, c: rc_number }) },
+      a: {
+        schema: rc_object({ b: rc_string, c: rc_number }),
+        default: { b: '', c: 0 },
+      },
     },
   });
 
   const { result, rerender } = renderHook(
     ({ value }: { value: number }) => {
       return localStore.useKeyWithSelector('a')(
-        useCallback((current) => (current?.c ?? 0) + value, [value]),
+        useCallback((current) => current.c + value, [value]),
       );
     },
     {
@@ -115,7 +116,7 @@ test('useKey load value previously set', () => {
     a: string;
   }>({
     items: {
-      a: { schema: rc_string },
+      a: { schema: rc_string, default: '' },
     },
   });
 
@@ -133,14 +134,17 @@ test('useKey with selector load value previously set', () => {
     a: { b: string; c: number };
   }>({
     items: {
-      a: { schema: rc_object({ b: rc_string, c: rc_number }) },
+      a: {
+        schema: rc_object({ b: rc_string, c: rc_number }),
+        default: { b: '', c: 0 },
+      },
     },
   });
 
   mockedLocalStorage.storage.setItem('slsm||a', '{"b":"hello","c":1}');
 
   const { result } = renderHook(() => {
-    return localStore.useKeyWithSelector('a')((value) => value?.b);
+    return localStore.useKeyWithSelector('a')((value) => value.b);
   });
 
   expect(result.current).toBe('hello');
@@ -158,7 +162,7 @@ test(
       a: string;
     }>({
       items: {
-        a: { schema: rc_string },
+        a: { schema: rc_string, default: '' },
       },
     });
 
@@ -185,7 +189,10 @@ test('useKey with selector should not rerender when value is the same', () => {
     a: { b: string; c: number };
   }>({
     items: {
-      a: { schema: rc_object({ b: rc_string, c: rc_number }) },
+      a: {
+        schema: rc_object({ b: rc_string, c: rc_number }),
+        default: { b: '', c: 0 },
+      },
     },
   });
 
@@ -197,7 +204,7 @@ test('useKey with selector should not rerender when value is the same', () => {
     return localStore.useKeyWithSelector('a')(
       useCallback((value) => {
         callCbCount++;
-        return value?.b;
+        return value.b;
       }, []),
     );
   });
@@ -213,31 +220,31 @@ test('useKey with selector should not rerender when value is the same', () => {
 
   // Update the value but keep 'b' the same
   act(() => {
-    localStore.produce('a', { b: 'hello', c: 1 }, (draft) => {
+    localStore.produce('a', (draft) => {
       draft.c = 2;
     });
   });
   expect(result.current).toBe('hello');
   expect(renderCount).toBe(2);
 
-  // Update 'b' with same value
+  // Update 'b' with same value (no actual change, so selector not called)
   act(() => {
-    localStore.produce('a', { b: 'world', c: 2 }, (draft) => {
+    localStore.produce('a', (draft) => {
       draft.b = 'hello';
     });
   });
   expect(result.current).toBe('hello');
   expect(renderCount).toBe(2);
-  expect(callCbCount).toBe(4);
+  expect(callCbCount).toBe(2); // No change, so selector not called again
 
   // Update 'b' with different value
   act(() => {
-    localStore.produce('a', { b: 'world', c: 2 }, (draft) => {
+    localStore.produce('a', (draft) => {
       draft.b = 'hello2';
     });
   });
 
   expect(renderCount).toBe(3);
   expect(result.current).toBe('hello2');
-  expect(callCbCount).toBe(5);
+  expect(callCbCount).toBe(3); // Selector called for the actual change
 });

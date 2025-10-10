@@ -17,7 +17,7 @@ test('set and read a value in store', () => {
     a: string;
   }>({
     items: {
-      a: { schema: rc_string },
+      a: { schema: rc_string, default: '' },
     },
   });
 
@@ -35,7 +35,7 @@ test('get value from store that is set in localStorage', () => {
     a: string;
   }>({
     items: {
-      a: { schema: rc_string },
+      a: { schema: rc_string, default: '' },
     },
   });
 
@@ -47,18 +47,18 @@ test('produce value', () => {
     a: string[];
   }>({
     items: {
-      a: { schema: rc_array(rc_string) },
+      a: { schema: rc_array(rc_string), default: [] },
     },
   });
 
-  localStore.produce('a', [], (draft) => {
+  localStore.produce('a', (draft) => {
     draft.push('hello');
   });
 
   expect(localStore.get('a')).toEqual(['hello']);
   expect(localStorage.getItem('slsm||a')).toBe('["hello"]');
 
-  localStore.produce('a', [], (draft) => {
+  localStore.produce('a', (draft) => {
     draft.push('world');
   });
 
@@ -71,15 +71,15 @@ test('set with setter function', () => {
     a: string[];
   }>({
     items: {
-      a: { schema: rc_array(rc_string) },
+      a: { schema: rc_array(rc_string), default: [] },
     },
   });
 
-  localStore.set('a', (currentValue) => [...(currentValue ?? []), 'hello']);
+  localStore.set('a', (currentValue) => [...currentValue, 'hello']);
 
   expect(localStore.get('a')).toEqual(['hello']);
 
-  localStore.set('a', (currentValue) => [...(currentValue ?? []), 'world']);
+  localStore.set('a', (currentValue) => [...currentValue, 'world']);
 
   expect(localStore.get('a')).toEqual(['hello', 'world']);
   expect(localStorage.getItem('slsm||a')).toBe('["hello","world"]');
@@ -90,7 +90,7 @@ test('delete value', () => {
     a: string;
   }>({
     items: {
-      a: { schema: rc_string },
+      a: { schema: rc_string, default: '' },
     },
   });
 
@@ -98,7 +98,7 @@ test('delete value', () => {
 
   localStore.delete('a');
 
-  expect(localStore.get('a')).toBeUndefined();
+  expect(localStore.get('a')).toBe('');
   expect(localStorage.getItem('slsm||a')).toBeNull();
 });
 
@@ -108,7 +108,7 @@ describe('session id', () => {
       a: string;
     }>({
       getSessionId: () => 'session-id',
-      items: { a: { schema: rc_string } },
+      items: { a: { schema: rc_string, default: '' } },
     });
 
     localStore.set('a', 'hello');
@@ -125,7 +125,7 @@ describe('session id', () => {
     }>({
       getSessionId: () => 'session-id',
       items: {
-        a: { schema: rc_string },
+        a: { schema: rc_string, default: '' },
       },
     });
 
@@ -137,14 +137,14 @@ describe('session id', () => {
       a: string;
     }>({
       getSessionId: () => 'session-id',
-      items: { a: { schema: rc_string } },
+      items: { a: { schema: rc_string, default: '' } },
     });
 
     localStore.set('a', 'hello');
 
     localStore.delete('a');
 
-    expect(localStore.get('a')).toBeUndefined();
+    expect(localStore.get('a')).toBe('');
     expect(localStorage.getItem('slsm-session-id||a')).toBeNull();
   });
 
@@ -155,14 +155,14 @@ describe('session id', () => {
       a: string;
     }>({
       getSessionId: () => sessionId,
-      items: { a: { schema: rc_string } },
+      items: { a: { schema: rc_string, default: '' } },
     });
 
     localStore.set('a', 'hello');
 
     sessionId = 'new-session-id';
 
-    expect(localStore.get('a')).toBe(undefined);
+    expect(localStore.get('a')).toBe('');
 
     localStore.set('a', 'hello2');
 
@@ -199,8 +199,8 @@ describe('session id', () => {
     }>({
       getSessionId: () => 'session-id',
       items: {
-        a: { ignoreSessionId: true, schema: rc_string },
-        b: { schema: rc_string },
+        a: { ignoreSessionId: true, schema: rc_string, default: '' },
+        b: { schema: rc_string, default: '' },
       },
     });
 
@@ -229,14 +229,15 @@ describe('session id', () => {
     }>({
       getSessionId: () => sessionId,
       items: {
-        c: { ignoreSessionId: true, schema: rc_string },
-        d: { useSessionStorage: true, schema: rc_string },
-        b: { schema: rc_string },
-        a: { schema: rc_string },
+        c: { ignoreSessionId: true, schema: rc_string, default: '' },
+        d: { useSessionStorage: true, schema: rc_string, default: '' },
+        b: { schema: rc_string, default: '' },
+        a: { schema: rc_string, default: '' },
         e: {
           useSessionStorage: true,
           ignoreSessionId: true,
           schema: rc_string,
+          default: '',
         },
       },
     });
@@ -281,9 +282,9 @@ describe('session id', () => {
       }
     `);
 
-    expect(localStore.get('a')).toBeUndefined();
-    expect(localStore.get('b')).toBeUndefined();
-    expect(localStore.get('c')).toBeUndefined();
+    expect(localStore.get('a')).toBe('');
+    expect(localStore.get('b')).toBe('');
+    expect(localStore.get('c')).toBe('');
   });
 
   test('clear all by session id', () => {
@@ -297,10 +298,10 @@ describe('session id', () => {
     }>({
       getSessionId: () => sessionId,
       items: {
-        c: { ignoreSessionId: true, schema: rc_string },
-        d: { useSessionStorage: true, schema: rc_string },
-        b: { schema: rc_string },
-        a: { schema: rc_string },
+        c: { ignoreSessionId: true, schema: rc_string, default: '' },
+        d: { useSessionStorage: true, schema: rc_string, default: '' },
+        b: { schema: rc_string, default: '' },
+        a: { schema: rc_string, default: '' },
       },
     });
 
@@ -314,7 +315,7 @@ describe('session id', () => {
 
     localStore.set('c', 'hello3');
 
-    expect(localStore.get('d')).toBe(undefined);
+    expect(localStore.get('d')).toBe('');
 
     localStore.set('d', 'hello4');
 
@@ -334,8 +335,8 @@ describe('session id', () => {
       }
     `);
 
-    expect(localStore.get('a')).toBeUndefined();
-    expect(localStore.get('b')).toBeUndefined();
+    expect(localStore.get('a')).toBe('');
+    expect(localStore.get('b')).toBe('');
     expect(localStore.get('c')).toBe('hello3');
 
     localStore.clearAllBy({
@@ -379,14 +380,15 @@ describe('session id', () => {
     }>({
       getSessionId: () => sessionId,
       items: {
-        c: { ignoreSessionId: true, schema: rc_string },
-        d: { useSessionStorage: true, schema: rc_string },
-        b: { schema: rc_string },
-        a: { schema: rc_string },
+        c: { ignoreSessionId: true, schema: rc_string, default: '' },
+        d: { useSessionStorage: true, schema: rc_string, default: '' },
+        b: { schema: rc_string, default: '' },
+        a: { schema: rc_string, default: '' },
         e: {
           useSessionStorage: true,
           ignoreSessionId: true,
           schema: rc_string,
+          default: '',
         },
       },
     });
@@ -442,7 +444,7 @@ test('item validation', () => {
       a: string;
     }>({
       items: {
-        a: { schema: rc_string },
+        a: { schema: rc_string, default: '' },
       },
     });
 
@@ -454,11 +456,11 @@ test('item validation', () => {
       a: number;
     }>({
       items: {
-        a: { schema: rc_number },
+        a: { schema: rc_number, default: 0 },
       },
     });
 
-    expect(localStore.get('a')).toBeUndefined();
+    expect(localStore.get('a')).toBe(0);
 
     localStore.set('a', 1);
 
@@ -472,10 +474,7 @@ describe('item with sessionStorage', () => {
       a: string;
     }>({
       items: {
-        a: {
-          useSessionStorage: true,
-          schema: rc_string,
-        },
+        a: { useSessionStorage: true, schema: rc_string, default: '' },
       },
     });
 
@@ -499,11 +498,8 @@ describe('item with sessionStorage', () => {
       b: string;
     }>({
       items: {
-        a: {
-          useSessionStorage: true,
-          schema: rc_string,
-        },
-        b: { schema: rc_string },
+        a: { useSessionStorage: true, schema: rc_string, default: '' },
+        b: { schema: rc_string, default: '' },
       },
     });
 
@@ -512,7 +508,7 @@ describe('item with sessionStorage', () => {
 
     localStore.delete('a');
 
-    expect(localStore.get('a')).toBeUndefined();
+    expect(localStore.get('a')).toBe('');
 
     expect(getStorageItems()).toMatchInlineSnapshot(`
       {
@@ -530,7 +526,7 @@ test('invalidate key on storage event', () => {
     a: string;
   }>({
     items: {
-      a: { schema: rc_string, syncTabsState: true },
+      a: { schema: rc_string, default: '', syncTabsState: true },
     },
   });
 
@@ -551,15 +547,12 @@ test('recover from max quota reached', () => {
     session: string;
   }>({
     items: {
-      session: {
-        useSessionStorage: true,
-        schema: rc_string,
-      },
-      a: { schema: rc_string },
-      b: { schema: rc_string },
-      c: { schema: rc_string },
-      d: { schema: rc_string },
-      e: { schema: rc_string },
+      session: { useSessionStorage: true, schema: rc_string, default: '' },
+      a: { schema: rc_string, default: '' },
+      b: { schema: rc_string, default: '' },
+      c: { schema: rc_string, default: '' },
+      d: { schema: rc_string, default: '' },
+      e: { schema: rc_string, default: '' },
     },
   });
 
@@ -652,6 +645,7 @@ test('auto prune', () => {
     items: {
       items: {
         schema: rc_array(rc_number),
+        default: [],
         autoPrune: (value) => {
           if (value.length > 4) {
             return value.slice(-4);
@@ -671,7 +665,7 @@ test('auto prune', () => {
 
   expect(localStore.get('items')).toEqual([7, 8, 9, 10]);
 
-  localStore.produce('items', [], (draft) => {
+  localStore.produce('items', (draft) => {
     draft.push(11);
   });
 
@@ -685,12 +679,8 @@ test.concurrent('auto prune deleted items', () => {
       willBeDeleted: number[];
     }>({
       items: {
-        items: {
-          schema: rc_array(rc_number),
-        },
-        willBeDeleted: {
-          schema: rc_array(rc_number),
-        },
+        items: { schema: rc_array(rc_number), default: [] },
+        willBeDeleted: { schema: rc_array(rc_number), default: [] },
       },
     });
 
@@ -703,9 +693,7 @@ test.concurrent('auto prune deleted items', () => {
       items: number[];
     }>({
       items: {
-        items: {
-          schema: rc_array(rc_number),
-        },
+        items: { schema: rc_array(rc_number), default: [] },
       },
     });
 
@@ -725,7 +713,7 @@ test('bug: store keeps reference of set values', () => {
     a: string[];
   }>({
     items: {
-      a: { schema: rc_array(rc_string) },
+      a: { schema: rc_array(rc_string), default: [] },
     },
   });
 
@@ -751,11 +739,11 @@ test('bug: set a item with a value that exceeds the quota', () => {
     e: string;
   }>({
     items: {
-      a: { schema: rc_string },
-      b: { schema: rc_string },
-      c: { schema: rc_string },
-      d: { schema: rc_string },
-      e: { schema: rc_string },
+      a: { schema: rc_string, default: '' },
+      b: { schema: rc_string, default: '' },
+      c: { schema: rc_string, default: '' },
+      d: { schema: rc_string, default: '' },
+      e: { schema: rc_string, default: '' },
     },
   });
 
@@ -767,18 +755,16 @@ test('bug: set a item with a value that exceeds the quota', () => {
   }).toThrowError();
 });
 
-test('set with default value', () => {
+test('set with setter function using default value', () => {
   const localStore = createSmartLocalStorage<{
     a: boolean;
-    b: boolean;
   }>({
     items: {
-      a: { schema: rc_boolean },
-      b: { schema: rc_boolean },
+      a: { schema: rc_boolean, default: true },
     },
   });
 
-  localStore.setWithDefault('a', true, (currentValue) => !currentValue);
+  localStore.set('a', (currentValue) => !currentValue);
 
   expect(localStore.get('a')).toBe(false);
 });

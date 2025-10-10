@@ -60,7 +60,6 @@
     "@ls-stack/eslint-cfg": "^0.5.1"
   },
   "dependencies": {
-    "immer": "^10.1.3",
     "klona": "^2.0.6",
     "runcheck": "^1.15.0",
     "t-state": "^9.8.0"

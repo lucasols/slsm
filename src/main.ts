@@ -1,15 +1,13 @@
 /* eslint-disable @ls-stack/require-description -- will be handled later */
 /* eslint-disable @typescript-eslint/consistent-type-assertions */
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 import { isFunction } from '@lucasols/utils/assertions';
-import { produce } from 'immer';
 import { klona } from 'klona';
-import { useCallback } from 'react';
 import { RcType, rc_parse_json } from 'runcheck';
 import { Store } from 't-state';
 
 type ItemOptions<V> = {
   schema: RcType<V>;
+  default: V;
   syncTabsState?: boolean;
   ignoreSessionId?: boolean;
   useSessionStorage?: boolean;
@@ -23,24 +21,17 @@ type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
   };
 };
 
-type ValueOrSetter<T> = T | ((currentValue: T | undefined) => T);
-type Setter<T> = (currentValue: T) => T;
+type ValueOrSetter<T> = T | ((currentValue: T) => T);
 
 type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
   set: <K extends keyof Schemas>(
     key: K,
     value: ValueOrSetter<Schemas[K]>,
   ) => void;
-  setWithDefault: <K extends keyof Schemas>(
-    key: K,
-    defaultValue: Schemas[K],
-    setter: Setter<Schemas[K]>,
-  ) => void;
   setUnknownValue: (key: string, value: unknown) => void;
-  get: <K extends keyof Schemas>(key: K) => Schemas[K] | undefined;
+  get: <K extends keyof Schemas>(key: K) => Schemas[K];
   produce: <K extends keyof Schemas>(
     key: K,
-    initialValue: Schemas[K],
     fn: (draft: Schemas[K]) => void | Schemas[K],
   ) => void;
 
@@ -52,10 +43,11 @@ type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
     allSessionIds?: boolean;
     withNoSessionId?: boolean;
   }) => void;
-  useKey: <K extends keyof Schemas>(key: K) => Schemas[K] | undefined;
+  useKey: <K extends keyof Schemas>(key: K) => Readonly<Schemas[K]>;
   useKeyWithSelector: <K extends keyof Schemas>(
     key: K,
-  ) => <S>(selector: (value: Schemas[K] | undefined) => S) => S;
+  ) => <S>(selector: (value: Schemas[K]) => S) => S;
+  getStore: <K extends keyof Schemas>(key: K) => Store<Schemas[K]>;
 };
 
 export function createSmartLocalStorage<
@@ -68,39 +60,26 @@ export function createSmartLocalStorage<
 
   type Items = keyof Schemas;
 
-  type Store = {
-    [storeKey: string]:
-      | {
-          key: Items;
-          value: Schemas[Items];
-        }
-      | undefined;
-  };
+  if (IS_BROWSER) {
+    requestIdleCallback(() => {
+      function cleanStorage(storage: Storage) {
+        for (const storageKey of getStorageItemKeys(storage)) {
+          const itemKey = storageKey.split('||')[1];
 
-  const valuesStore = new Store<Store>({
-    state: {},
-  });
+          if (itemKey) {
+            const isConfigured = !!items[itemKey];
 
-  requestIdleCallback(() => {
-    if (!IS_BROWSER) return;
-
-    function cleanStorage(storage: Storage) {
-      for (const storageKey of getStorageItemKeys(storage)) {
-        const itemKey = storageKey.split('||')[1];
-
-        if (itemKey) {
-          const isConfigured = !!items[itemKey];
-
-          if (!isConfigured) {
-            localStorage.removeItem(storageKey);
+            if (!isConfigured) {
+              localStorage.removeItem(storageKey);
+            }
           }
         }
       }
-    }
 
-    cleanStorage(localStorage);
-    cleanStorage(sessionStorage);
-  });
+      cleanStorage(localStorage);
+      cleanStorage(sessionStorage);
+    });
+  }
 
   function getItemStorage(key: Items) {
     return items[key].useSessionStorage ? sessionStorage : localStorage;
@@ -120,152 +99,223 @@ export function createSmartLocalStorage<
     }||${String(key)}`;
   }
 
-  function deleteItemByStorageKey(storageKey: string) {
+  function getInitialValue<K extends Items>(key: K): Schemas[K] | undefined {
+    if (!IS_BROWSER) return undefined;
+
+    const itemKey = getLocalStorageItemKey(key);
+    if (!itemKey) return undefined;
+
+    const itemStorage = getItemStorage(key);
+    const itemValue = itemStorage.getItem(itemKey);
+
+    if (itemValue === null) return undefined;
+
+    const itemOptions = items[key];
+    const validationResult = rc_parse_json(itemValue, itemOptions.schema);
+
+    if (validationResult.errors) {
+      console.error('[slsm] error parsing value', validationResult.errors);
+      return undefined;
+    }
+
+    return validationResult.value;
+  }
+
+  // Create stores keyed by storage key (includes session ID) to handle session changes
+  const itemStores = new Map<string, Store<any>>();
+
+  function getStore<K extends Items>(key: K): Store<Schemas[K]> {
+    const storageKey = getLocalStorageItemKey(key);
+    if (!storageKey) {
+      // Return a temporary store with default value if session ID is false
+      return new Store<Schemas[K]>({ state: items[key].default });
+    }
+
+    let store = itemStores.get(storageKey) as Store<Schemas[K]> | undefined;
+    if (!store) {
+      // Initialize store with value from storage or default value
+      const valueFromStorage = getInitialValue(key);
+      store = new Store<Schemas[K]>({
+        state: valueFromStorage ?? items[key].default,
+      });
+      itemStores.set(storageKey, store);
+    }
+
+    return store;
+  }
+
+  function deleteItemByStorageKey(storageKey: string, key?: Items) {
     sessionStorage.removeItem(storageKey);
     localStorage.removeItem(storageKey);
 
-    valuesStore.setKey(storageKey, undefined);
+    // Reset to default value if we know the key
+    if (key) {
+      const store = getStore(key);
+      const itemOptions = items[key];
+      store.setState(itemOptions.default);
+    }
   }
 
-  function setItemValueInStore(
+  function handleQuotaExceeded(
     storageKey: string,
-    key: Items,
-    finalValue: any,
-    itemStorage: Storage,
-  ) {
-    try {
-      if (IS_BROWSER) {
-        itemStorage.setItem(storageKey, JSON.stringify(finalValue));
+    operation: () => void,
+    error: DOMException,
+  ): void {
+    function tryOperation() {
+      try {
+        operation();
+        return true;
+      } catch (retryError) {
+        if (
+          retryError instanceof DOMException &&
+          retryError.name === 'QuotaExceededError'
+        ) {
+          return false;
+        }
+        throw retryError;
       }
+    }
+
+    // Try removing all session storage items first
+    const sessionStorageKeys = getStorageItemKeys(sessionStorage, storageKey);
+
+    if (sessionStorageKeys.length !== 0) {
+      for (const itemKey of sessionStorageKeys) {
+        deleteItemByStorageKey(itemKey);
+      }
+
+      if (tryOperation()) return;
+    }
+
+    // If still failing, remove localStorage items
+    const currentSessionId = getSessionId();
+
+    function checkLargestItem(itemsToCheck: string[]) {
+      let largestItemSize = 0;
+      let largestItemKey = '';
+
+      for (const itemKey of itemsToCheck) {
+        const itemSize = localStorage.getItem(itemKey)?.length ?? 0;
+
+        if (itemSize > largestItemSize) {
+          largestItemSize = itemSize;
+          largestItemKey = itemKey;
+        }
+      }
+
+      return largestItemKey || null;
+    }
+
+    // Keep removing items until operation succeeds or we run out of items
+    while (true) {
+      const localStorageKeys = getStorageItemKeys(localStorage, storageKey);
+
+      if (localStorageKeys.length === 0) break;
+
+      // Try to remove from different sessions first
+      const itemsInDifferentSessions = localStorageKeys.filter(
+        (itemKey) =>
+          !itemKey.startsWith(`slsm-${currentSessionId}`) &&
+          !itemKey.startsWith(`slsm|`),
+      );
+
+      const largestItemKeyInDifferentSessions = checkLargestItem(
+        itemsInDifferentSessions,
+      );
+
+      if (largestItemKeyInDifferentSessions) {
+        localStorage.removeItem(largestItemKeyInDifferentSessions);
+        if (tryOperation()) return;
+        continue;
+      }
+
+      // Remove from current session as last resort
+      const largestItemKey = checkLargestItem(localStorageKeys);
+
+      if (largestItemKey) {
+        localStorage.removeItem(largestItemKey);
+        if (tryOperation()) return;
+      } else {
+        break;
+      }
+    }
+
+    // Could not free up enough space
+    throw error;
+  }
+
+  // Centralized function to write value to storage with quota handling
+  function writeToStorage(storageKey: string, value: any, storage: Storage) {
+    function write() {
+      storage.setItem(storageKey, JSON.stringify(value));
+    }
+
+    if (!IS_BROWSER) return;
+
+    try {
+      write();
     } catch (error) {
       if (
         error instanceof DOMException &&
         error.name === 'QuotaExceededError'
       ) {
-        const sessionStorageKeys = getStorageItemKeys(
-          sessionStorage,
-          storageKey,
-        );
-
-        if (sessionStorageKeys.length !== 0) {
-          for (const itemKey of sessionStorageKeys) {
-            deleteItemByStorageKey(itemKey);
-          }
-
-          setItemValueInStore(storageKey, key, finalValue, itemStorage);
-          return;
-        }
-
-        const currentSessionId = getSessionId();
-
-        const localStorageKeys = getStorageItemKeys(localStorage, storageKey);
-
-        function checkLargestItem(itemsToCheck: string[]) {
-          let largestItemSize = 0;
-          let largestItemKey = '';
-
-          for (const itemKey of itemsToCheck) {
-            const itemSize = localStorage.getItem(itemKey)?.length ?? 0;
-
-            if (itemSize > largestItemSize) {
-              largestItemSize = itemSize;
-              largestItemKey = itemKey;
-            }
-          }
-
-          return largestItemKey || null;
-        }
-
-        if (localStorageKeys.length !== 0) {
-          const itemsInDifferentSessions = localStorageKeys.filter(
-            (itemKey) =>
-              !itemKey.startsWith(`slsm-${currentSessionId}`) &&
-              !itemKey.startsWith(`slsm|`),
-          );
-
-          const largestItemKeyInDifferentSessions = checkLargestItem(
-            itemsInDifferentSessions,
-          );
-
-          if (largestItemKeyInDifferentSessions) {
-            localStorage.removeItem(largestItemKeyInDifferentSessions);
-
-            setItemValueInStore(storageKey, key, finalValue, itemStorage);
-            return;
-          } else {
-            const largestItemKey = checkLargestItem(localStorageKeys);
-
-            if (largestItemKey) {
-              localStorage.removeItem(largestItemKey);
-
-              setItemValueInStore(storageKey, key, finalValue, itemStorage);
-              return;
-            }
-          }
-        }
-
+        handleQuotaExceeded(storageKey, write, error);
+      } else {
         throw error;
       }
-
-      throw error;
     }
+  }
 
-    valuesStore.setKey(storageKey, {
-      key,
-      value: klona(finalValue),
-    });
+  // Update store state and persist to storage
+  function updateItem<K extends Items>(
+    key: K,
+    value: Schemas[K],
+    storageKey: string,
+  ) {
+    const store = getStore(key);
+    store.setState(klona(value));
+
+    const itemStorage = getItemStorage(key);
+    writeToStorage(storageKey, value, itemStorage);
   }
 
   function setItemValue<K extends Items>(
     key: K,
     value: ValueOrSetter<Schemas[K]>,
-  ): void;
-  function setItemValue<K extends Items>(
-    key: K,
-    value: Setter<Schemas[K]>,
-    defaultValue: Schemas[K],
-  ): void;
-  function setItemValue<K extends Items>(
-    key: K,
-    value: ValueOrSetter<Schemas[K]> | Setter<Schemas[K]>,
-    defaultValue?: Schemas[K],
   ): void {
-    const itemKey = getLocalStorageItemKey(key);
-
-    if (!itemKey) return;
+    const storageKey = getLocalStorageItemKey(key);
+    if (!storageKey) return;
 
     const itemOptions = items[key];
+    const store = getStore(key);
 
-    const currentValue = getValue(key) ?? defaultValue;
-
-    let finalValue =
-      isFunction(value) ? value(currentValue as Schemas[K]) : value;
+    let finalValue = isFunction(value) ? value(store.state) : value;
 
     if (itemOptions.autoPrune) {
       finalValue = itemOptions.autoPrune(finalValue);
     }
 
-    const itemStorage = getItemStorage(key);
-
-    setItemValueInStore(itemKey, key, finalValue, itemStorage);
+    updateItem(key, finalValue, storageKey);
   }
 
   if (IS_BROWSER) {
     globalThis.addEventListener('storage', (event) => {
       if (!event.key?.startsWith('slsm')) return;
 
-      const storeKey = event.key;
+      const storageKey = event.key;
 
-      const stateItem = valuesStore.state[storeKey];
+      // Extract the item key from storage key (format: slsm[-sessionId][|s]||itemKey)
+      const itemKey = storageKey.split('||')[1] as Items | undefined;
+      if (!itemKey) return;
 
-      if (!stateItem) return;
-
-      const itemOptions = items[stateItem.key];
-
+      const itemOptions = items[itemKey];
       if (!itemOptions.syncTabsState) return;
 
+      const store = getStore(itemKey);
+
       if (event.newValue === null) {
-        valuesStore.setKey(storeKey, undefined);
+        // Reset to default value
+        store.setState(itemOptions.default);
         return;
       }
 
@@ -279,57 +329,12 @@ export function createSmartLocalStorage<
         return;
       }
 
-      valuesStore.produceState((draft) => {
-        const storeItem = draft[storeKey];
-
-        if (!storeItem) return;
-
-        storeItem.value = validationResult.value;
-      });
+      store.setState(validationResult.value);
     });
   }
 
-  function getValue<K extends Items>(
-    key: K,
-    delayStoreUpdate?: boolean,
-  ): Schemas[K] | undefined {
-    const itemKey = getLocalStorageItemKey(key);
-
-    if (!itemKey) return;
-
-    const stateItem = valuesStore.state[itemKey]?.value;
-
-    if (stateItem) return stateItem as Schemas[K] | undefined;
-
-    const itemStorage = getItemStorage(key);
-
-    const itemValue = itemStorage.getItem(itemKey);
-
-    if (itemValue === null) return;
-
-    const itemOptions = items[key];
-
-    const validationResult = rc_parse_json(itemValue, itemOptions.schema);
-
-    if (validationResult.error) {
-      console.error('[slsm] error parsing value', validationResult.errors);
-      return undefined;
-    }
-
-    const finalValue: Schemas[K] | undefined = validationResult.value;
-
-    if (delayStoreUpdate) {
-      queueMicrotask(() => {
-        valuesStore.setKey(itemKey, { key, value: finalValue });
-      });
-    } else {
-      valuesStore.setKey(itemKey, {
-        key,
-        value: finalValue,
-      });
-    }
-
-    return finalValue;
+  function getValue<K extends Items>(key: K): Schemas[K] {
+    return getStore(key).state;
   }
 
   function setUnknownValue(key: string, value: unknown) {
@@ -348,16 +353,32 @@ export function createSmartLocalStorage<
 
   return {
     set: setItemValue,
-    setWithDefault: (key, defaultValue, value) => {
-      setItemValue(key, value, defaultValue);
-    },
     get: getValue,
     setUnknownValue,
 
-    produce: (key, initialValue, recipe) => {
-      setItemValue(key, (currentValue) =>
-        produce(currentValue || initialValue, recipe),
-      );
+    produce: (key, recipe) => {
+      const storageKey = getLocalStorageItemKey(key);
+      if (!storageKey) return;
+
+      const itemOptions = items[key];
+      const store = getStore(key);
+
+      store.produceState((draft) => {
+        const result = recipe(draft);
+        // If recipe returns a value, use it; otherwise mutations are applied
+        return result !== undefined ? result : draft;
+      });
+
+      let finalValue = store.state;
+
+      if (itemOptions.autoPrune) {
+        finalValue = itemOptions.autoPrune(finalValue);
+        store.setState(finalValue);
+      }
+
+      // Persist to storage (store already updated by produceState/setState)
+      const itemStorage = getItemStorage(key);
+      writeToStorage(storageKey, finalValue, itemStorage);
     },
 
     delete: (key) => {
@@ -369,100 +390,87 @@ export function createSmartLocalStorage<
 
       itemStorage.removeItem(itemKey);
 
-      valuesStore.setKey(itemKey, undefined);
+      // Reset to default value
+      const store = getStore(key);
+      const itemOptions = items[key];
+      store.setState(itemOptions.default);
     },
 
     clearAll: () => {
-      for (const key of getStorageItemKeys(localStorage)) {
-        valuesStore.setKey(key, undefined);
-        localStorage.removeItem(key);
+      for (const storageKey of getStorageItemKeys(localStorage)) {
+        localStorage.removeItem(storageKey);
+
+        // Reset corresponding store to default value
+        const itemKey = storageKey.split('||')[1] as Items | undefined;
+        if (itemKey) {
+          const store = getStore(itemKey);
+          store.setState(items[itemKey].default);
+        }
       }
 
-      for (const key of getStorageItemKeys(sessionStorage)) {
-        valuesStore.setKey(key, undefined);
-        sessionStorage.removeItem(key);
+      for (const storageKey of getStorageItemKeys(sessionStorage)) {
+        sessionStorage.removeItem(storageKey);
+
+        // Reset corresponding store to default value
+        const itemKey = storageKey.split('||')[1] as Items | undefined;
+        if (itemKey) {
+          const store = getStore(itemKey);
+          store.setState(items[itemKey].default);
+        }
       }
     },
 
     clearAllBy: ({ sessionId, allSessionIds, withNoSessionId }) => {
-      valuesStore.batch(() => {
-        function removeKeyFromStorage(key: string, storage: Storage) {
-          let shouldRemove = false;
+      function removeKeyFromStorage(storageKey: string, storage: Storage) {
+        let shouldRemove = false;
 
-          const hasSessionId = !key.startsWith(`slsm|`);
+        const hasSessionId = !storageKey.startsWith(`slsm|`);
 
-          if (withNoSessionId) {
-            shouldRemove = !hasSessionId;
-          } else if (allSessionIds) {
-            shouldRemove = hasSessionId;
-          } else if (sessionId) {
-            shouldRemove = hasSessionId && key.startsWith(`slsm-${sessionId}`);
+        if (withNoSessionId) {
+          shouldRemove = !hasSessionId;
+        } else if (allSessionIds) {
+          shouldRemove = hasSessionId;
+        } else if (sessionId) {
+          shouldRemove =
+            hasSessionId && storageKey.startsWith(`slsm-${sessionId}`);
+        }
+
+        if (shouldRemove) {
+          storage.removeItem(storageKey);
+
+          // Reset corresponding store to default value
+          const itemKey = storageKey.split('||')[1] as Items | undefined;
+          if (itemKey) {
+            const store = getStore(itemKey);
+            store.setState(items[itemKey].default);
           }
-
-          if (shouldRemove) {
-            valuesStore.setKey(key, undefined);
-            storage.removeItem(key);
-          }
         }
+      }
 
-        for (const key of getStorageItemKeys(localStorage)) {
-          removeKeyFromStorage(key, localStorage);
-        }
+      for (const storageKey of getStorageItemKeys(localStorage)) {
+        removeKeyFromStorage(storageKey, localStorage);
+      }
 
-        for (const key of getStorageItemKeys(sessionStorage)) {
-          removeKeyFromStorage(key, sessionStorage);
-        }
-      });
+      for (const storageKey of getStorageItemKeys(sessionStorage)) {
+        removeKeyFromStorage(storageKey, sessionStorage);
+      }
     },
 
     useKey: (key) => {
-      return valuesStore.useSelector((state) => {
-        const itemKey = getLocalStorageItemKey(key);
-
-        if (!itemKey) return undefined;
-
-        const value = state[itemKey]?.value;
-
-        if (value === undefined) {
-          const valueFromStorage = getValue(key, true);
-
-          return valueFromStorage;
-        } else {
-          return value;
-        }
-      }) as any;
+      const store = getStore(key);
+      return store.useState();
     },
 
     useKeyWithSelector: (key) => {
-      return function useSelector(selector) {
-        const cb = useCallback(
-          (state: Store) => {
-            const value = (() => {
-              const itemKey = getLocalStorageItemKey(key);
-
-              if (!itemKey) return;
-
-              const valueFromState = state[itemKey]?.value as
-                | Schemas[typeof key]
-                | undefined;
-
-              if (valueFromState === undefined) {
-                const valueFromStorage = getValue(key, true);
-
-                return valueFromStorage;
-              } else {
-                return valueFromState;
-              }
-            })();
-
-            return selector(value);
-          },
-          [key, selector],
-        );
-
-        return valuesStore.useSelector(cb, { useExternalDeps: true }) as any;
+      return function useSelector<S>(
+        selector: (value: Schemas[typeof key]) => S,
+      ) {
+        const store = getStore(key);
+        return store.useSelector(selector, { useExternalDeps: true }) as S;
       };
     },
+
+    getStore,
   };
 }
 
