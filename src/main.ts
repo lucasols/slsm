@@ -9,6 +9,11 @@ type ItemOptions<V> = {
   schema: RcType<V>;
   default: V;
   syncTabsState?: boolean;
+  /**
+   * if storage is full, the item with the lowest priority will be removed first to free up space
+   * @default 0
+   */
+  priority?: number;
   ignoreSessionId?: boolean;
   useSessionStorage?: boolean;
   autoPrune?: (value: V) => V;
