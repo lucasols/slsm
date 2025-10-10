@@ -347,7 +347,7 @@ export function createSmartLocalStorage<
   function setUnknownValue(key: string, value: unknown) {
     const itemOptions = items[key];
     if (itemOptions) {
-      const validationResult = rc_parse_json(value, itemOptions.schema);
+      const validationResult = itemOptions.schema.parse(value);
 
       if (validationResult.errors) {
         console.error('[slsm] error parsing value', validationResult.errors);

@@ -28,6 +28,21 @@ test('set and read a value in store', () => {
   expect(localStorage.getItem('slsm||a')).toBe('"hello"');
 });
 
+test('set unknown value without json serialization', () => {
+  const localStore = createSmartLocalStorage<{
+    a: string;
+  }>({
+    items: {
+      a: { schema: rc_string, default: '' },
+    },
+  });
+
+  localStore.setUnknownValue('a', 'hello');
+
+  expect(localStore.get('a')).toBe('hello');
+  expect(localStorage.getItem('slsm||a')).toBe('"hello"');
+});
+
 test('get value from store that is set in localStorage', () => {
   localStorage.setItem('slsm||a', '"hello"');
 
