@@ -1,5 +1,3 @@
-/* eslint-disable @ls-stack/require-description -- will be handled later */
-/* eslint-disable @typescript-eslint/consistent-type-assertions */
 import { sortBy } from '@lucasols/utils/arrayUtils';
 import { isFunction } from '@lucasols/utils/assertions';
 import { deepEqual } from '@lucasols/utils/deepEqual';
@@ -138,6 +136,7 @@ export function createSmartLocalStorage<
       return new Store<Schemas[K]>({ state: items[key].default });
     }
 
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- this is necessary here
     let store = itemStores.get(storageKey) as Store<Schemas[K]> | undefined;
     if (!store) {
       // Initialize store with value from storage or default value
@@ -161,6 +160,10 @@ export function createSmartLocalStorage<
       const itemOptions = items[key];
       store.setState(itemOptions.default);
     }
+  }
+
+  function getItemKeyFromStorageKey(storageKey: string): Items | undefined {
+    return storageKey.split('||')[1];
   }
 
   function handleQuotaExceeded(
@@ -198,7 +201,7 @@ export function createSmartLocalStorage<
     const currentSessionId = getSessionId();
 
     function getItemPriority(itemStorageKey: string): number {
-      const itemKey = itemStorageKey.split('||')[1] as Items | undefined;
+      const itemKey = getItemKeyFromStorageKey(itemStorageKey);
       if (!itemKey) return 0;
       return items[itemKey].priority ?? 0;
     }
@@ -313,7 +316,7 @@ export function createSmartLocalStorage<
       const storageKey = event.key;
 
       // Extract the item key from storage key (format: slsm[-sessionId][|s]||itemKey)
-      const itemKey = storageKey.split('||')[1] as Items | undefined;
+      const itemKey = getItemKeyFromStorageKey(storageKey);
       if (!itemKey) return;
 
       const itemOptions = items[itemKey];
@@ -409,7 +412,7 @@ export function createSmartLocalStorage<
         localStorage.removeItem(storageKey);
 
         // Reset corresponding store to default value
-        const itemKey = storageKey.split('||')[1] as Items | undefined;
+        const itemKey = getItemKeyFromStorageKey(storageKey);
         if (itemKey) {
           const store = getStore(itemKey);
           store.setState(items[itemKey].default);
@@ -420,7 +423,7 @@ export function createSmartLocalStorage<
         sessionStorage.removeItem(storageKey);
 
         // Reset corresponding store to default value
-        const itemKey = storageKey.split('||')[1] as Items | undefined;
+        const itemKey = getItemKeyFromStorageKey(storageKey);
         if (itemKey) {
           const store = getStore(itemKey);
           store.setState(items[itemKey].default);
@@ -447,7 +450,7 @@ export function createSmartLocalStorage<
           storage.removeItem(storageKey);
 
           // Reset corresponding store to default value
-          const itemKey = storageKey.split('||')[1] as Items | undefined;
+          const itemKey = getItemKeyFromStorageKey(storageKey);
           if (itemKey) {
             const store = getStore(itemKey);
             store.setState(items[itemKey].default);
@@ -474,7 +477,7 @@ export function createSmartLocalStorage<
         selector: (value: Schemas[typeof key]) => S,
       ) {
         const store = getStore(key);
-        return store.useSelector(selector, { useExternalDeps: true }) as S;
+        return store.useSelector(selector, { useExternalDeps: true });
       };
     },
 
