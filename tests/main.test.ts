@@ -12,7 +12,7 @@ beforeEach(() => {
   reset();
 });
 
-test.only('set and read a value in store', () => {
+test('set and read a value in store', () => {
   const localStore = createSmartLocalStorage<{
     a: string;
   }>({
@@ -530,7 +530,7 @@ test('invalidate key on storage event', () => {
     a: string;
   }>({
     items: {
-      a: { schema: rc_string },
+      a: { schema: rc_string, syncTabsState: true },
     },
   });
 

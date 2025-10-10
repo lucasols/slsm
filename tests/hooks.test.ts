@@ -20,6 +20,7 @@ test('useKey', () => {
     items: {
       a: {
         schema: rc_string,
+        syncTabsState: true,
       },
     },
   });
@@ -48,7 +49,10 @@ test('useKey with selector', () => {
     a: { b: string; c: number };
   }>({
     items: {
-      a: { schema: rc_object({ b: rc_string, c: rc_number }) },
+      a: {
+        schema: rc_object({ b: rc_string, c: rc_number }),
+        syncTabsState: true,
+      },
     },
   });
 
@@ -174,7 +178,7 @@ test(
   },
 );
 
-test.only('useKey with selector should not rerender when value is the same', () => {
+test('useKey with selector should not rerender when value is the same', () => {
   mockedLocalStorage.storage.setItem('slsm||a', '{"b":"hello","c":1}');
 
   const localStore = createSmartLocalStorage<{

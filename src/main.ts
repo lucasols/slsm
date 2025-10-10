@@ -262,6 +262,8 @@ export function createSmartLocalStorage<
 
       const itemOptions = items[stateItem.key];
 
+      if (!itemOptions.syncTabsState) return;
+
       if (event.newValue === null) {
         valuesStore.setKey(storeKey, undefined);
         return;
