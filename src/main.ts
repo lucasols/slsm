@@ -1,6 +1,7 @@
 /* eslint-disable @ls-stack/require-description -- will be handled later */
 /* eslint-disable @typescript-eslint/consistent-type-assertions */
 import { isFunction } from '@lucasols/utils/assertions';
+import { sortBy } from '@lucasols/utils/arrayUtils';
 import { klona } from 'klona';
 import { RcType, rc_parse_json } from 'runcheck';
 import { Store } from 't-state';
@@ -192,23 +193,22 @@ export function createSmartLocalStorage<
       if (tryOperation()) return;
     }
 
-    // If still failing, remove localStorage items
+    // If still failing, remove localStorage items based on priority
     const currentSessionId = getSessionId();
 
-    function checkLargestItem(itemsToCheck: string[]) {
-      let largestItemSize = 0;
-      let largestItemKey = '';
+    function getItemPriority(itemStorageKey: string): number {
+      const itemKey = itemStorageKey.split('||')[1] as Items | undefined;
+      if (!itemKey) return 0;
+      return items[itemKey].priority ?? 0;
+    }
 
-      for (const itemKey of itemsToCheck) {
-        const itemSize = localStorage.getItem(itemKey)?.length ?? 0;
-
-        if (itemSize > largestItemSize) {
-          largestItemSize = itemSize;
-          largestItemKey = itemKey;
-        }
-      }
-
-      return largestItemKey || null;
+    function sortByPriorityAndSize(storageKeys: string[]) {
+      return sortBy(storageKeys, (key) => {
+        const priority = getItemPriority(key);
+        const size = localStorage.getItem(key)?.length ?? 0;
+        // Lower priority first, larger size first (negate for descending)
+        return [priority, -size];
+      });
     }
 
     // Keep removing items until operation succeeds or we run out of items
@@ -217,28 +217,30 @@ export function createSmartLocalStorage<
 
       if (localStorageKeys.length === 0) break;
 
-      // Try to remove from different sessions first
+      // Try to remove from different sessions first (sorted by priority)
       const itemsInDifferentSessions = localStorageKeys.filter(
         (itemKey) =>
           !itemKey.startsWith(`slsm-${currentSessionId}`) &&
           !itemKey.startsWith(`slsm|`),
       );
 
-      const largestItemKeyInDifferentSessions = checkLargestItem(
+      const sortedDifferentSessions = sortByPriorityAndSize(
         itemsInDifferentSessions,
       );
 
-      if (largestItemKeyInDifferentSessions) {
-        localStorage.removeItem(largestItemKeyInDifferentSessions);
+      const firstDifferentSession = sortedDifferentSessions[0];
+      if (firstDifferentSession) {
+        localStorage.removeItem(firstDifferentSession);
         if (tryOperation()) return;
         continue;
       }
 
-      // Remove from current session as last resort
-      const largestItemKey = checkLargestItem(localStorageKeys);
+      // Remove from current session as last resort (sorted by priority)
+      const sortedCurrentSession = sortByPriorityAndSize(localStorageKeys);
 
-      if (largestItemKey) {
-        localStorage.removeItem(largestItemKey);
+      const firstCurrentSession = sortedCurrentSession[0];
+      if (firstCurrentSession) {
+        localStorage.removeItem(firstCurrentSession);
         if (tryOperation()) return;
       } else {
         break;
@@ -347,8 +349,8 @@ export function createSmartLocalStorage<
     if (itemOptions) {
       const validationResult = rc_parse_json(value, itemOptions.schema);
 
-      if (validationResult.error) {
-        console.error('[slsm] error parsing value', validationResult.error);
+      if (validationResult.errors) {
+        console.error('[slsm] error parsing value', validationResult.errors);
         return;
       }
 

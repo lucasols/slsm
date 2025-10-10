@@ -728,6 +728,216 @@ test('bug: store keeps reference of set values', () => {
   expect(localStore.get('a')).toEqual(['hello']);
 });
 
+describe('priority-based quota management', () => {
+  test('items with lower priority are removed first when quota exceeded', () => {
+    const localStore = createSmartLocalStorage<{
+      lowPriority: string;
+      mediumPriority: string;
+      highPriority: string;
+      newItem: string;
+    }>({
+      items: {
+        lowPriority: { schema: rc_string, default: '', priority: 1 },
+        mediumPriority: { schema: rc_string, default: '', priority: 5 },
+        highPriority: { schema: rc_string, default: '', priority: 10 },
+        newItem: { schema: rc_string, default: '', priority: 5 },
+      },
+    });
+
+    // Fill up storage with items of different priorities
+    localStore.set('lowPriority', 'x'.repeat(30));
+    localStore.set('mediumPriority', 'x'.repeat(30));
+    localStore.set('highPriority', 'x'.repeat(30));
+
+    const currentSize = getBytes();
+    mockQuota(currentSize + 50); // Set quota just above current size
+
+    // This should trigger quota exceeded and remove lowPriority (priority 1)
+    localStore.set('newItem', 'x'.repeat(30));
+
+    const items = getStorageItems();
+    expect(items.local['slsm||lowPriority']).toBeUndefined();
+    expect(items.local['slsm||mediumPriority']).toBeDefined();
+    expect(items.local['slsm||highPriority']).toBeDefined();
+    expect(items.local['slsm||newItem']).toBeDefined();
+  });
+
+  test('within same priority, larger items are removed first', () => {
+    const localStore = createSmartLocalStorage<{
+      smallItem: string;
+      largeItem: string;
+      newItem: string;
+    }>({
+      items: {
+        smallItem: { schema: rc_string, default: '', priority: 1 },
+        largeItem: { schema: rc_string, default: '', priority: 1 },
+        newItem: { schema: rc_string, default: '', priority: 5 },
+      },
+    });
+
+    localStore.set('smallItem', 'x'.repeat(30));
+    localStore.set('largeItem', 'x'.repeat(90));
+
+    const currentSize = getBytes();
+    mockQuota(currentSize + 80);
+
+    // This should remove largeItem (same priority but larger)
+    localStore.set('newItem', 'x'.repeat(90));
+
+    const items = getStorageItems();
+    expect(items.local['slsm||largeItem']).toBeUndefined();
+    expect(items.local['slsm||smallItem']).toBeDefined();
+    expect(items.local['slsm||newItem']).toBeDefined();
+  });
+
+  test('default priority is 0 when not specified', () => {
+    const localStore = createSmartLocalStorage<{
+      noPriority: string;
+      withPriority: string;
+      newItem: string;
+    }>({
+      items: {
+        noPriority: { schema: rc_string, default: '' }, // priority defaults to 0
+        withPriority: { schema: rc_string, default: '', priority: 5 },
+        newItem: { schema: rc_string, default: '' },
+      },
+    });
+
+    localStore.set('noPriority', 'x'.repeat(30));
+    localStore.set('withPriority', 'x'.repeat(30));
+
+    const currentSize = getBytes();
+    mockQuota(currentSize + 50);
+
+    // Should remove noPriority (priority 0) before withPriority (priority 5)
+    localStore.set('newItem', 'x'.repeat(30));
+
+    const items = getStorageItems();
+    expect(items.local['slsm||noPriority']).toBeUndefined();
+    expect(items.local['slsm||withPriority']).toBeDefined();
+    expect(items.local['slsm||newItem']).toBeDefined();
+  });
+
+  test('removes multiple items if needed to free space', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string;
+      b: string;
+      c: string;
+      d: string;
+    }>({
+      items: {
+        a: { schema: rc_string, default: '', priority: 1 },
+        b: { schema: rc_string, default: '', priority: 2 },
+        c: { schema: rc_string, default: '', priority: 3 },
+        d: { schema: rc_string, default: '', priority: 10 },
+      },
+    });
+
+    localStore.set('a', 'x'.repeat(20));
+    localStore.set('b', 'x'.repeat(20));
+    localStore.set('c', 'x'.repeat(20));
+
+    const currentSize = getBytes();
+    mockQuota(currentSize + 70);
+
+    // Should remove both a and b (lower priorities) to make space
+    localStore.set('d', 'x'.repeat(100));
+
+    const items = getStorageItems();
+    expect(items.local['slsm||a']).toBeUndefined();
+    expect(items.local['slsm||b']).toBeUndefined();
+    expect(items.local['slsm||c']).toBeDefined();
+    expect(items.local['slsm||d']).toBeDefined();
+  });
+
+  test('works correctly with different sessions', () => {
+    const session1Store = createSmartLocalStorage<{
+      a: string;
+      b: string;
+    }>({
+      getSessionId: () => 'session1',
+      items: {
+        a: { schema: rc_string, default: '', priority: 5 },
+        b: { schema: rc_string, default: '', priority: 1 },
+      },
+    });
+
+    const session2Store = createSmartLocalStorage<{
+      a: string;
+      b: string;
+    }>({
+      getSessionId: () => 'session2',
+      items: {
+        a: { schema: rc_string, default: '', priority: 5 },
+        b: { schema: rc_string, default: '', priority: 1 },
+      },
+    });
+
+    // Set items in session 1
+    session1Store.set('a', 'x'.repeat(20));
+    session1Store.set('b', 'x'.repeat(20));
+
+    // Set items in session 2
+    session2Store.set('a', 'x'.repeat(20));
+
+    const currentSize = getBytes();
+    mockQuota(currentSize + 40);
+
+    // should remove session1's low priority item first
+    session2Store.set('b', 'x'.repeat(20));
+
+    const items = getStorageItems();
+
+    // Session 1's low priority item should be removed
+    expect(items.local['slsm-session1||b']).toBeUndefined();
+    // Session 1's high priority item should remain
+    expect(items.local['slsm-session1||a']).toBeDefined();
+    // All session 2 items should exist
+    expect(items.local['slsm-session2||a']).toBeDefined();
+    expect(items.local['slsm-session2||b']).toBeDefined();
+  });
+
+  test('removes from different sessions before current session', () => {
+    const session1Store = createSmartLocalStorage<{
+      item: string;
+    }>({
+      getSessionId: () => 'session1',
+      items: {
+        item: { schema: rc_string, default: '', priority: 10 },
+      },
+    });
+
+    const session2Store = createSmartLocalStorage<{
+      item: string;
+      newItem: string;
+    }>({
+      getSessionId: () => 'session2',
+      items: {
+        item: { schema: rc_string, default: '', priority: 1 },
+        newItem: { schema: rc_string, default: '', priority: 5 },
+      },
+    });
+
+    // Set items in different sessions
+    session1Store.set('item', 'x'.repeat(60));
+    session2Store.set('item', 'x'.repeat(60));
+
+    const currentSize = getBytes();
+    mockQuota(currentSize + 80);
+
+    // This should remove session1's item (different session, sorted by priority)
+    session2Store.set('newItem', 'x'.repeat(60));
+
+    const items = getStorageItems();
+
+    // Session 1's item should be removed (different session, higher priority than session2's item)
+    expect(items.local['slsm-session1||item']).toBeUndefined();
+    // Session 2's items should remain
+    expect(items.local['slsm-session2||item']).toBeDefined();
+    expect(items.local['slsm-session2||newItem']).toBeDefined();
+  });
+});
+
 test('bug: set a item with a value that exceeds the quota', () => {
   mockQuota(900);
 
