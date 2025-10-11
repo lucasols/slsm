@@ -8,7 +8,7 @@
     "test:run": "vitest run",
     "lint": "pnpm tsc && pnpm eslint",
     "tsc": "tsc -p tsconfig.prod.json",
-    "eslint": "CI=true eslint src/ --color --max-warnings=0",
+    "eslint": "CI=true eslint src/ tests/ --color --max-warnings=0",
     "build": "pnpm test:run && pnpm lint && pnpm build:no-test",
     "build:no-test": "tsup",
     "build-test": "tsup --config tsup.test.config.ts",

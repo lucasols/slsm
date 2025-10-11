@@ -13,8 +13,8 @@ import {
 import { Store } from 't-state';
 
 type SyncDelay =
-  | { type: 'debounce'; ms: number }
-  | { type: 'onIdleCallback'; timeoutMs: number };
+  | { type: 'debounce'; ms: number; maxWaitMs?: number }
+  | { type: 'onIdleCallback'; timeoutMs: number; maxWaitMs?: number };
 
 type Compress = {
   /**
@@ -76,9 +76,9 @@ type ItemOptions<V> = {
    */
   compress?: Compress;
   /**
-   * Delay storage sync to the store
+   * Delay storage sync to the store. Use `false` to disable the global sync delay.
    */
-  syncDelay?: SyncDelay;
+  syncDelay?: SyncDelay | false;
 };
 
 type ItemTtlOption<V> = NonNullable<ItemOptions<V>['ttl']>;
@@ -193,6 +193,17 @@ export function createSmartLocalStorage<
   const ttlStates = new Map<string, TtlState<Items>>();
   const itemStores = new Map<string, Store<any>>();
   const isInternalUpdate = new Map<string, boolean>();
+  const pendingSyncOperations = new Map<
+    string,
+    {
+      timerId?: ReturnType<typeof setTimeout>;
+      cancelIdleCallback?: VoidFunction;
+      value: unknown;
+      metadata?: TtlMetadata;
+      source?: 'cleanup' | 'mutation';
+      firstScheduledAt?: number;
+    }
+  >();
 
   if (IS_BROWSER) {
     requestIdleCallback(function handleIdleCleanup() {
@@ -252,6 +263,25 @@ export function createSmartLocalStorage<
 
   function getCompressionForKey<K extends Items>(key: K): Compress | undefined {
     return items[key].compress ?? compress;
+  }
+
+  function getSyncDelayForKey<K extends Items>(key: K): SyncDelay | undefined {
+    const itemSyncDelay = items[key].syncDelay;
+    if (itemSyncDelay === false) return undefined;
+    return itemSyncDelay ?? syncDelay;
+  }
+
+  function cancelPendingSync(storageKey: string) {
+    const pending = pendingSyncOperations.get(storageKey);
+    if (pending) {
+      if (pending.timerId) {
+        clearTimeout(pending.timerId);
+      }
+      if (pending.cancelIdleCallback) {
+        pending.cancelIdleCallback();
+      }
+      pendingSyncOperations.delete(storageKey);
+    }
   }
 
   function createEnvelopePayload<K extends Items>(
@@ -737,16 +767,83 @@ export function createSmartLocalStorage<
       }
     }
 
-    const storage = getItemStorage(key);
-    const payload =
-      ttl && metadata ? createEnvelopePayload(key, value, metadata) : value;
+    function performWrite() {
+      const storage = getItemStorage(key);
+      const payload =
+        ttl && metadata ? createEnvelopePayload(key, value, metadata) : value;
 
-    writeToStorage(storageKey, payload, storage, options?.source === 'cleanup');
+      writeToStorage(
+        storageKey,
+        payload,
+        storage,
+        options?.source === 'cleanup',
+      );
 
-    if (ttl && metadata) {
-      setTtlState(storageKey, key, metadata);
+      if (ttl && metadata) {
+        setTtlState(storageKey, key, metadata);
+      } else {
+        clearTtlState(storageKey);
+      }
+
+      pendingSyncOperations.delete(storageKey);
+    }
+
+    // Only apply sync delay for user mutations, not for cleanup operations
+    const syncDelayConfig =
+      options?.source === 'mutation' ? getSyncDelayForKey(key) : undefined;
+
+    if (syncDelayConfig) {
+      const now = Date.now();
+      const pending = pendingSyncOperations.get(storageKey);
+      const maxWaitMs = syncDelayConfig.maxWaitMs;
+
+      // Cancel any existing pending sync for this storage key
+      const firstScheduledAt = pending?.firstScheduledAt ?? now;
+      cancelPendingSync(storageKey);
+
+      if (syncDelayConfig.type === 'debounce') {
+        let delay = syncDelayConfig.ms;
+
+        // If maxWaitMs is set, ensure we don't exceed it
+        if (maxWaitMs) {
+          const elapsed = now - firstScheduledAt;
+          const timeUntilMaxWait = maxWaitMs - elapsed;
+
+          if (timeUntilMaxWait <= 0) {
+            // maxWaitMs already exceeded, write immediately
+            performWrite();
+            return;
+          }
+
+          // Schedule timer to fire no later than maxWaitMs
+          delay = Math.min(delay, timeUntilMaxWait);
+        }
+
+        const timerId = setTimeout(performWrite, delay);
+        pendingSyncOperations.set(storageKey, {
+          timerId,
+          value,
+          metadata,
+          source: options?.source,
+          firstScheduledAt,
+        });
+      } else {
+        // onIdleCallback
+        const cancel = requestIdleCallback(
+          performWrite,
+          syncDelayConfig.timeoutMs,
+        );
+        pendingSyncOperations.set(storageKey, {
+          cancelIdleCallback: cancel,
+          value,
+          metadata,
+          source: options?.source,
+          firstScheduledAt,
+        });
+      }
     } else {
-      clearTtlState(storageKey);
+      // No sync delay, write immediately
+      performWrite();
     }
   }
 
@@ -866,6 +963,7 @@ export function createSmartLocalStorage<
     sessionStorage.removeItem(storageKey);
     localStorage.removeItem(storageKey);
     clearTtlState(storageKey);
+    cancelPendingSync(storageKey);
 
     const itemKey = getItemKeyFromStorageKey(storageKey);
     if (!itemKey) return;
@@ -1081,6 +1179,7 @@ export function createSmartLocalStorage<
     const storage = getItemStorage(key);
     storage.removeItem(storageKey);
     clearTtlState(storageKey);
+    cancelPendingSync(storageKey);
 
     isInternalUpdate.set(storageKey, true);
     const store = getStore(key);
@@ -1090,6 +1189,7 @@ export function createSmartLocalStorage<
   function resetStoreToDefault(storageKey: string) {
     const itemKey = getItemKeyFromStorageKey(storageKey);
     if (itemKey) {
+      cancelPendingSync(storageKey);
       isInternalUpdate.set(storageKey, true);
       const store = getStore(itemKey);
       store.setState(items[itemKey].default);
@@ -1117,6 +1217,14 @@ export function createSmartLocalStorage<
     },
 
     clearAll: () => {
+      // Cancel all pending syncs first (including ones not yet written to storage)
+      for (const key in items) {
+        const storageKey = getLocalStorageItemKey(key);
+        if (storageKey) {
+          cancelPendingSync(storageKey);
+        }
+      }
+
       for (const storageKey of getStorageItemKeys(localStorage, undefined)) {
         localStorage.removeItem(storageKey);
         clearTtlState(storageKey);
