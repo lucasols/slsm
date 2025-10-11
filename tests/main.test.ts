@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/consistent-type-assertions -- assertions in tests are ok */
 import { rc_array, rc_boolean, rc_number, rc_string } from 'runcheck';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { createSmartLocalStorage } from '../src/main.js';
@@ -483,6 +484,283 @@ test('item validation', () => {
   }
 });
 
+describe('ttl', () => {
+  test('persists ttl envelope metadata', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const localStore = createSmartLocalStorage<{
+      a: string;
+    }>({
+      items: {
+        a: {
+          schema: rc_string,
+          default: '',
+          ttl: {
+            ms: 1_000,
+          },
+        },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    const stored = JSON.parse(localStorage.getItem('slsm||a') ?? '{}') as {
+      _: { t: number; p?: Record<string, number> };
+      v: unknown;
+    };
+
+    expect(stored.v).toBe('hello');
+    expect(stored._.t).toBe(0);
+    expect(stored._.p).toBeUndefined();
+
+    vi.useRealTimers();
+  });
+
+  test('whole item ttl expires after duration', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const localStore = createSmartLocalStorage<{
+      a: string;
+    }>({
+      items: {
+        a: {
+          schema: rc_string,
+          default: '',
+          ttl: {
+            ms: 1_000,
+          },
+        },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    vi.advanceTimersByTime(1_200);
+    vi.setSystemTime(1_200);
+
+    expect(localStore.get('a')).toBe('');
+    expect(localStorage.getItem('slsm||a')).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  test('part ttl prunes expired segments', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const localStore = createSmartLocalStorage<{
+      feed: string[];
+    }>({
+      items: {
+        feed: {
+          schema: rc_array(rc_string),
+          default: [],
+          ttl: {
+            ms: 1_000,
+            splitIntoParts: (value) => value,
+            removePart: (value, partKey) =>
+              value.filter((entry) => entry !== partKey),
+          },
+        },
+      },
+    });
+
+    localStore.set('feed', ['alpha']);
+
+    vi.advanceTimersByTime(500);
+    vi.setSystemTime(500);
+
+    localStore.set('feed', ['alpha', 'beta']);
+
+    vi.advanceTimersByTime(600);
+    vi.setSystemTime(1_100);
+
+    expect(localStore.get('feed')).toEqual(['beta']);
+
+    const stored = JSON.parse(localStorage.getItem('slsm||feed') ?? '{}') as {
+      _: { t: number; p?: Record<string, number> };
+      v: string[];
+    };
+
+    expect(stored.v).toEqual(['beta']);
+    expect(stored._.p).toEqual({ beta: 500 });
+
+    vi.useRealTimers();
+  });
+
+  test('startup sweep removes expired ttl items', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(5_000);
+
+    localStorage.setItem(
+      'slsm||a',
+      JSON.stringify({
+        _: { t: 0 },
+        v: 'stale',
+      }),
+    );
+
+    const localStore = createSmartLocalStorage<{
+      a: string;
+    }>({
+      items: {
+        a: {
+          schema: rc_string,
+          default: '',
+          ttl: {
+            ms: 1_000,
+          },
+        },
+      },
+    });
+
+    expect(localStore.get('a')).toBe('');
+    expect(localStorage.getItem('slsm||a')).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  test('initial load prunes expired ttl parts', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_200);
+
+    localStorage.setItem(
+      'slsm||feed',
+      JSON.stringify({
+        _: { t: 600, p: { old: 0, fresh: 600 } },
+        v: ['old', 'fresh'],
+      }),
+    );
+
+    const localStore = createSmartLocalStorage<{
+      feed: string[];
+    }>({
+      items: {
+        feed: {
+          schema: rc_array(rc_string),
+          default: [],
+          ttl: {
+            ms: 1_000,
+            splitIntoParts: (value) => value,
+            removePart: (value, partKey) =>
+              value.filter((entry) => entry !== partKey),
+          },
+        },
+      },
+    });
+
+    expect(localStore.get('feed')).toEqual(['fresh']);
+
+    const stored = JSON.parse(localStorage.getItem('slsm||feed') ?? '{}') as {
+      _: { t: number; p?: Record<string, number> };
+      v: string[];
+    };
+
+    expect(stored.v).toEqual(['fresh']);
+    expect(stored._.p).toEqual({ fresh: 600 });
+
+    vi.useRealTimers();
+  });
+
+  test('storage event clears expired ttl entry', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const localStore = createSmartLocalStorage<{
+      a: string;
+    }>({
+      items: {
+        a: {
+          schema: rc_string,
+          default: '',
+          syncTabsState: true,
+          ttl: {
+            ms: 1_000,
+          },
+        },
+      },
+    });
+
+    localStore.set('a', 'fresh');
+
+    vi.setSystemTime(2_000);
+
+    const expiredEnvelope = JSON.stringify({
+      _: { t: 0 },
+      v: 'stale',
+    });
+
+    mockedLocalStorage.mockExternalChange('slsm||a', expiredEnvelope);
+
+    expect(localStore.get('a')).toBe('');
+    expect(localStorage.getItem('slsm||a')).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  test('quota cleanup prunes expired ttl before other keys', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const newValue = 'x'.repeat(90);
+
+    const localStore = createSmartLocalStorage<{
+      ttlKey: string;
+      retained: string;
+      newItem: string;
+    }>({
+      items: {
+        ttlKey: {
+          schema: rc_string,
+          default: '',
+          ttl: {
+            ms: 1_000,
+          },
+        },
+        retained: { schema: rc_string, default: '' },
+        newItem: { schema: rc_string, default: '' },
+      },
+    });
+
+    localStore.set('ttlKey', 'stale');
+    localStore.set('retained', 'keep');
+
+    const newValueSerialized = JSON.stringify(newValue);
+    const currentItems = mockedLocalStorage.getItems();
+    const bytesWithTtl = JSON.stringify({
+      ...currentItems,
+      'slsm||newItem': newValueSerialized,
+    }).length;
+
+    const { 'slsm||ttlKey': _removedTtl, ...itemsWithoutTtl } = currentItems;
+    const bytesWithoutTtl = JSON.stringify({
+      ...itemsWithoutTtl,
+      'slsm||newItem': newValueSerialized,
+    }).length;
+
+    expect(bytesWithTtl).toBeGreaterThan(bytesWithoutTtl);
+
+    mockQuota(bytesWithoutTtl + 5);
+
+    vi.setSystemTime(2_000);
+
+    expect(localStorage.getItem('slsm||ttlKey')).not.toBeNull();
+
+    localStore.set('newItem', newValue);
+
+    expect(localStorage.getItem('slsm||ttlKey')).toBeNull();
+    expect(localStorage.getItem('slsm||retained')).toBe('"keep"');
+    expect(JSON.parse(localStorage.getItem('slsm||newItem') ?? 'null')).toBe(
+      newValue,
+    );
+
+    mockQuota(Infinity);
+    vi.useRealTimers();
+  });
+});
+
 describe('item with sessionStorage', () => {
   test('set item as sessionStorage', () => {
     const localStore = createSmartLocalStorage<{
@@ -687,7 +965,9 @@ test('auto prune', () => {
   expect(localStore.get('items')).toEqual([8, 9, 10, 11]);
 });
 
-test.concurrent('auto prune deleted items', () => {
+test('auto prune deleted items', () => {
+  vi.useRealTimers();
+
   {
     const localStore = createSmartLocalStorage<{
       items: number[];

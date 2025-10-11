@@ -358,7 +358,24 @@ export function createSmartLocalStorage<
         return;
       }
 
-      setItemValue(key, validationResult.value);
+
+  function deleteItem(key: Items) {
+    const storageKey = getLocalStorageItemKey(key);
+    if (!storageKey) return;
+
+    const storage = getItemStorage(key);
+    storage.removeItem(storageKey);
+    clearTtlState(storageKey);
+
+    const store = getStore(key);
+    store.setState(items[key].default);
+  }
+
+  function resetStoreToDefault(storageKey: string) {
+    const itemKey = getItemKeyFromStorageKey(storageKey);
+    if (itemKey) {
+      const store = getStore(itemKey);
+      store.setState(items[itemKey].default);
     }
   }
 
@@ -371,63 +388,35 @@ export function createSmartLocalStorage<
       const storageKey = getLocalStorageItemKey(key);
       if (!storageKey) return;
 
-      const itemOptions = items[key];
       const store = getStore(key);
 
       store.produceState((draft) => {
         const result = recipe(draft);
-        // If recipe returns a value, use it; otherwise mutations are applied
         return result !== undefined ? result : draft;
       });
 
       let finalValue = store.state;
+      finalValue = applyAutoPrune(key, finalValue);
+      store.setState(klona(finalValue), { equalityCheck: deepEqual });
 
-      if (itemOptions.autoPrune) {
-        finalValue = itemOptions.autoPrune(finalValue);
-        store.setState(finalValue);
-      }
-
-      // Persist to storage (store already updated by produceState/setState)
-      const itemStorage = getItemStorage(key);
-      writeToStorage(storageKey, finalValue, itemStorage);
+      persistValue(key, finalValue, storageKey, { source: 'mutation' });
     },
 
     delete: (key) => {
-      const itemKey = getLocalStorageItemKey(key);
-
-      if (!itemKey) return;
-
-      const itemStorage = getItemStorage(key);
-
-      itemStorage.removeItem(itemKey);
-
-      // Reset to default value
-      const store = getStore(key);
-      const itemOptions = items[key];
-      store.setState(itemOptions.default);
+      deleteItem(key);
     },
 
     clearAll: () => {
       for (const storageKey of getStorageItemKeys(localStorage)) {
         localStorage.removeItem(storageKey);
-
-        // Reset corresponding store to default value
-        const itemKey = getItemKeyFromStorageKey(storageKey);
-        if (itemKey) {
-          const store = getStore(itemKey);
-          store.setState(items[itemKey].default);
-        }
+        clearTtlState(storageKey);
+        resetStoreToDefault(storageKey);
       }
 
       for (const storageKey of getStorageItemKeys(sessionStorage)) {
         sessionStorage.removeItem(storageKey);
-
-        // Reset corresponding store to default value
-        const itemKey = getItemKeyFromStorageKey(storageKey);
-        if (itemKey) {
-          const store = getStore(itemKey);
-          store.setState(items[itemKey].default);
-        }
+        clearTtlState(storageKey);
+        resetStoreToDefault(storageKey);
       }
     },
 
@@ -448,13 +437,8 @@ export function createSmartLocalStorage<
 
         if (shouldRemove) {
           storage.removeItem(storageKey);
-
-          // Reset corresponding store to default value
-          const itemKey = getItemKeyFromStorageKey(storageKey);
-          if (itemKey) {
-            const store = getStore(itemKey);
-            store.setState(items[itemKey].default);
-          }
+          clearTtlState(storageKey);
+          resetStoreToDefault(storageKey);
         }
       }
 
@@ -504,6 +488,7 @@ function getStorageItemKeys(storage: Storage, except?: string) {
 function requestIdleCallback(callback: () => void) {
   if ('requestIdleCallback' in globalThis) {
     globalThis.requestIdleCallback(callback);
+    return;
   }
 
   setTimeout(callback, 50);
