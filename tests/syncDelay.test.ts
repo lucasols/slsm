@@ -240,6 +240,37 @@ describe('syncDelay', () => {
       vi.useRealTimers();
     });
 
+    test('pending sync is canceled when setting to undefined', () => {
+      vi.useFakeTimers();
+
+      const localStore = createSmartLocalStorage<{
+        temp: string | undefined;
+      }>({
+        items: {
+          temp: {
+            schema: rc_string.optional(),
+            default: '',
+            syncDelay: { type: 'debounce', ms: 100 },
+          },
+        },
+      });
+
+      localStore.set('temp', 'value');
+
+      expect(localStorage.getItem('slsm||temp')).toBeNull();
+
+      // Set to undefined before debounce completes
+      localStore.set('temp', undefined);
+
+      vi.advanceTimersByTime(100);
+
+      // Should not have written the value
+      expect(localStorage.getItem('slsm||temp')).toBeNull();
+      expect(localStore.get('temp')).toBe('');
+
+      vi.useRealTimers();
+    });
+
     test('pending sync is canceled on clearAll', () => {
       vi.useFakeTimers();
 

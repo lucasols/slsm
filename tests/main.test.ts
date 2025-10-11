@@ -77,6 +77,118 @@ test('produce value', () => {
   expect(localStorage.getItem('slsm||a')).toBe('["hello","world"]');
 });
 
+describe('produce with undefined/null', () => {
+  test('produce on item that does not exist yet uses default value', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string[];
+    }>({
+      items: {
+        a: { schema: rc_array(rc_string), default: ['default'] },
+      },
+    });
+
+    // Item doesn't exist in storage yet
+    expect(localStorage.getItem('slsm||a')).toBeNull();
+
+    // Produce should work with the default value
+    localStore.produce('a', (draft) => {
+      draft.push('added');
+    });
+
+    expect(localStore.get('a')).toEqual(['default', 'added']);
+    expect(localStorage.getItem('slsm||a')).toBe('["default","added"]');
+  });
+
+  test('produce recipe returning undefined keeps existing value', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string[] | undefined;
+    }>({
+      items: {
+        a: { schema: rc_array(rc_string).optional(), default: undefined },
+      },
+    });
+
+    localStore.set('a', ['hello', 'world']);
+
+    expect(localStore.get('a')).toEqual(['hello', 'world']);
+
+    // Recipe returns undefined - should keep existing value
+    localStore.produce('a', () => {
+      return undefined;
+    });
+
+    expect(localStore.get('a')).toEqual(['hello', 'world']);
+    expect(localStorage.getItem('slsm||a')).toBe('["hello","world"]');
+  });
+
+  test('produce can set value to null if schema allows', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string[] | null;
+    }>({
+      items: {
+        a: { schema: rc_array(rc_string).orNull(), default: null },
+      },
+    });
+
+    localStore.set('a', ['hello']);
+
+    expect(localStore.get('a')).toEqual(['hello']);
+
+    // Recipe returns null - should set to null
+    localStore.produce('a', () => {
+      return null;
+    });
+
+    expect(localStore.get('a')).toBeNull();
+    expect(localStorage.getItem('slsm||a')).toBe('null');
+  });
+
+  test('produce with empty array default on non-existent item', () => {
+    const localStore = createSmartLocalStorage<{
+      a: { items: string[] };
+    }>({
+      items: {
+        a: {
+          schema: rc_object({ items: rc_array(rc_string) }),
+          default: { items: [] },
+        },
+      },
+    });
+
+    // Item doesn't exist yet, should use default
+    expect(localStorage.getItem('slsm||a')).toBeNull();
+
+    // Produce should work with default value
+    localStore.produce('a', (draft) => {
+      draft.items.push('first');
+    });
+
+    expect(localStore.get('a')).toEqual({ items: ['first'] });
+  });
+
+  test('produce mutating draft without returning keeps changes', () => {
+    const localStore = createSmartLocalStorage<{
+      a: { count: number };
+    }>({
+      items: {
+        a: {
+          schema: rc_object({ count: rc_number }),
+          default: { count: 0 },
+        },
+      },
+    });
+
+    localStore.set('a', { count: 5 });
+
+    // Mutate draft without returning anything (implicit undefined return)
+    localStore.produce('a', (draft) => {
+      draft.count += 10;
+    });
+
+    expect(localStore.get('a')).toEqual({ count: 15 });
+  });
+});
+
 test('set with setter function', () => {
   const localStore = createSmartLocalStorage<{
     a: string[];
@@ -111,6 +223,122 @@ test('delete value', () => {
 
   expect(localStore.get('a')).toBe('');
   expect(localStorage.getItem('slsm||a')).toBeNull();
+});
+
+describe('set to undefined deletes item', () => {
+  test('set item to undefined directly', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string | undefined;
+    }>({
+      items: {
+        a: { schema: rc_string.optional(), default: '' },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    expect(localStore.get('a')).toBe('hello');
+    expect(localStorage.getItem('slsm||a')).toBe('"hello"');
+
+    localStore.set('a', undefined);
+
+    expect(localStore.get('a')).toBe('');
+    expect(localStorage.getItem('slsm||a')).toBeNull();
+  });
+
+  test('set item to undefined using setter function', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string | undefined;
+    }>({
+      items: {
+        a: { schema: rc_string.optional(), default: '' },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    expect(localStore.get('a')).toBe('hello');
+
+    localStore.set('a', () => undefined);
+
+    expect(localStore.get('a')).toBe('');
+    expect(localStorage.getItem('slsm||a')).toBeNull();
+  });
+
+  test('set to undefined works with session scoped items', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string | undefined;
+    }>({
+      getSessionId: () => 'test-session',
+      items: {
+        a: { schema: rc_string.optional(), default: '' },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    expect(localStore.get('a')).toBe('hello');
+    expect(localStorage.getItem('slsm-test-session||a')).toBe('"hello"');
+
+    localStore.set('a', undefined);
+
+    expect(localStore.get('a')).toBe('');
+    expect(localStorage.getItem('slsm-test-session||a')).toBeNull();
+  });
+
+  test('set to undefined works with sessionStorage', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string | undefined;
+    }>({
+      items: {
+        a: {
+          schema: rc_string.optional(),
+          default: '',
+          useSessionStorage: true,
+        },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    expect(localStore.get('a')).toBe('hello');
+    expect(sessionStorage.getItem('slsm|s||a')).toBe('"hello"');
+
+    localStore.set('a', undefined);
+
+    expect(localStore.get('a')).toBe('');
+    expect(sessionStorage.getItem('slsm|s||a')).toBeNull();
+  });
+
+  test('set to undefined clears TTL state', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(TTL_BASE_MS);
+
+    const localStore = createSmartLocalStorage<{
+      a: string | undefined;
+    }>({
+      items: {
+        a: {
+          schema: rc_string.optional(),
+          default: '',
+          ttl: {
+            minutes: 5,
+          },
+        },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    expect(localStorage.getItem('slsm||a')).not.toBeNull();
+
+    localStore.set('a', undefined);
+
+    expect(localStore.get('a')).toBe('');
+    expect(localStorage.getItem('slsm||a')).toBeNull();
+
+    vi.useRealTimers();
+  });
 });
 
 describe('session id', () => {
@@ -1755,7 +1983,10 @@ describe('autoPruneBySize', () => {
 
 describe('auto-prune on initial load', () => {
   test('autoPrune is applied when loading value from storage', () => {
-    localStorage.setItem('slsm||items', JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+    localStorage.setItem(
+      'slsm||items',
+      JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+    );
 
     const localStore = createSmartLocalStorage<{
       items: number[];
@@ -1775,7 +2006,9 @@ describe('auto-prune on initial load', () => {
     });
 
     expect(localStore.get('items')).toEqual([7, 8, 9, 10]);
-    expect(JSON.parse(localStorage.getItem('slsm||items') ?? '[]')).toEqual([7, 8, 9, 10]);
+    expect(JSON.parse(localStorage.getItem('slsm||items') ?? '[]')).toEqual([
+      7, 8, 9, 10,
+    ]);
   });
 
   test('autoPruneBySize is applied when loading oversized value from storage', () => {
@@ -1784,7 +2017,10 @@ describe('auto-prune on initial load', () => {
     type Item = { messages: string[] };
 
     const largeMessages = Array.from({ length: 100 }, (_, i) => `Message ${i}`);
-    localStorage.setItem('slsm||chat', JSON.stringify({ messages: largeMessages }));
+    localStorage.setItem(
+      'slsm||chat',
+      JSON.stringify({ messages: largeMessages }),
+    );
 
     const localStore = createSmartLocalStorage<{
       chat: Item;
@@ -1819,8 +2055,14 @@ describe('auto-prune on initial load', () => {
 
     type Item = { messages: string[] };
 
-    const largeMessages = Array.from({ length: 100 }, (_, i) => `Message with long text ${i}`);
-    localStorage.setItem('slsm||chat', JSON.stringify({ messages: largeMessages }));
+    const largeMessages = Array.from(
+      { length: 100 },
+      (_, i) => `Message with long text ${i}`,
+    );
+    localStorage.setItem(
+      'slsm||chat',
+      JSON.stringify({ messages: largeMessages }),
+    );
 
     const localStore = createSmartLocalStorage<{
       chat: Item;

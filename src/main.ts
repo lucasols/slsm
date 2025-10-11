@@ -1112,6 +1112,12 @@ export function createSmartLocalStorage<
     const currentValue = store.state;
     const nextValue = isFunction(value) ? value(currentValue) : value;
 
+    // If the resolved value is undefined, delete the item instead of storing it
+    if (nextValue === undefined) {
+      deleteItem(key);
+      return;
+    }
+
     store.setState(klona(nextValue), { equalityCheck: deepEqual });
   }
 
