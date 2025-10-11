@@ -163,6 +163,12 @@ type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
     fn: (draft: Schemas[K]) => void | Schemas[K],
   ) => void;
 
+  produceWithNullableFallback: <K extends keyof Schemas>(
+    key: K,
+    nullableFallback: NonNullable<Schemas[K]>,
+    fn: (draft: NonNullable<Schemas[K]>) => void | Schemas[K],
+  ) => void;
+
   delete: <K extends keyof Schemas>(key: K) => void;
 
   clearAll: () => void;
@@ -948,6 +954,17 @@ export function createSmartLocalStorage<
         // Apply auto-pruning to the next state
         const prunedValue = applyAutoPrune(key, next);
 
+        // If the pruned value equals the default value, delete the item
+        if (deepEqual(prunedValue, items[key].default)) {
+          const storage = getItemStorage(key);
+          storage.removeItem(storageKey);
+          clearTtlState(storageKey);
+          cancelPendingSync(storageKey);
+
+          // Return the default value to the store
+          return items[key].default;
+        }
+
         // Persist the pruned value
         persistValue(key, prunedValue, storageKey, { source: 'mutation' });
 
@@ -1112,8 +1129,8 @@ export function createSmartLocalStorage<
     const currentValue = store.state;
     const nextValue = isFunction(value) ? value(currentValue) : value;
 
-    // If the resolved value is undefined, delete the item instead of storing it
-    if (nextValue === undefined) {
+    // If the resolved value is undefined or equals the default value, delete the item instead of storing it
+    if (nextValue === undefined || deepEqual(nextValue, items[key].default)) {
       deleteItem(key);
       return;
     }

@@ -101,10 +101,10 @@ describe('produce with undefined/null', () => {
 
   test('produce recipe returning undefined keeps existing value', () => {
     const localStore = createSmartLocalStorage<{
-      a: string[] | undefined;
+      a: string[];
     }>({
       items: {
-        a: { schema: rc_array(rc_string).optional(), default: undefined },
+        a: { schema: rc_array(rc_string), default: [] },
       },
     });
 
@@ -112,7 +112,7 @@ describe('produce with undefined/null', () => {
 
     expect(localStore.get('a')).toEqual(['hello', 'world']);
 
-    // Recipe returns undefined - should keep existing value
+    // Recipe returns undefined - should keep existing value (as per the produce API wrapper)
     localStore.produce('a', () => {
       return undefined;
     });
@@ -134,13 +134,14 @@ describe('produce with undefined/null', () => {
 
     expect(localStore.get('a')).toEqual(['hello']);
 
-    // Recipe returns null - should set to null
+    // Recipe returns null - should set to null (and delete storage since null is the default)
     localStore.produce('a', () => {
       return null;
     });
 
     expect(localStore.get('a')).toBeNull();
-    expect(localStorage.getItem('slsm||a')).toBe('null');
+    // Storage entry should be deleted when value equals default
+    expect(localStorage.getItem('slsm||a')).toBeNull();
   });
 
   test('produce with empty array default on non-existent item', () => {
@@ -225,7 +226,7 @@ test('delete value', () => {
   expect(localStorage.getItem('slsm||a')).toBeNull();
 });
 
-describe('set to undefined deletes item', () => {
+describe('set to undefined or default deletes item', () => {
   test('set item to undefined directly', () => {
     const localStore = createSmartLocalStorage<{
       a: string | undefined;
@@ -335,6 +336,187 @@ describe('set to undefined deletes item', () => {
     localStore.set('a', undefined);
 
     expect(localStore.get('a')).toBe('');
+    expect(localStorage.getItem('slsm||a')).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  test('set item to default string value deletes storage', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string;
+    }>({
+      items: {
+        a: { schema: rc_string, default: 'default' },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    expect(localStore.get('a')).toBe('hello');
+    expect(localStorage.getItem('slsm||a')).toBe('"hello"');
+
+    localStore.set('a', 'default');
+
+    expect(localStore.get('a')).toBe('default');
+    expect(localStorage.getItem('slsm||a')).toBeNull();
+  });
+
+  test('set item to default number value deletes storage', () => {
+    const localStore = createSmartLocalStorage<{
+      count: number;
+    }>({
+      items: {
+        count: { schema: rc_number, default: 0 },
+      },
+    });
+
+    localStore.set('count', 42);
+
+    expect(localStore.get('count')).toBe(42);
+    expect(localStorage.getItem('slsm||count')).toBe('42');
+
+    localStore.set('count', 0);
+
+    expect(localStore.get('count')).toBe(0);
+    expect(localStorage.getItem('slsm||count')).toBeNull();
+  });
+
+  test('set item to default object value deletes storage', () => {
+    const localStore = createSmartLocalStorage<{
+      config: { theme: string; fontSize: number };
+    }>({
+      items: {
+        config: {
+          schema: rc_object({
+            theme: rc_string,
+            fontSize: rc_number,
+          }),
+          default: { theme: 'light', fontSize: 14 },
+        },
+      },
+    });
+
+    localStore.set('config', { theme: 'dark', fontSize: 16 });
+
+    expect(localStore.get('config')).toEqual({ theme: 'dark', fontSize: 16 });
+    expect(localStorage.getItem('slsm||config')).not.toBeNull();
+
+    localStore.set('config', { theme: 'light', fontSize: 14 });
+
+    expect(localStore.get('config')).toEqual({ theme: 'light', fontSize: 14 });
+    expect(localStorage.getItem('slsm||config')).toBeNull();
+  });
+
+  test('set item to default array value deletes storage', () => {
+    const localStore = createSmartLocalStorage<{
+      items: string[];
+    }>({
+      items: {
+        items: { schema: rc_array(rc_string), default: [] },
+      },
+    });
+
+    localStore.set('items', ['a', 'b', 'c']);
+
+    expect(localStore.get('items')).toEqual(['a', 'b', 'c']);
+    expect(localStorage.getItem('slsm||items')).toBe('["a","b","c"]');
+
+    localStore.set('items', []);
+
+    expect(localStore.get('items')).toEqual([]);
+    expect(localStorage.getItem('slsm||items')).toBeNull();
+  });
+
+  test('set to default with setter function deletes storage', () => {
+    const localStore = createSmartLocalStorage<{
+      count: number;
+    }>({
+      items: {
+        count: { schema: rc_number, default: 0 },
+      },
+    });
+
+    localStore.set('count', 10);
+
+    expect(localStore.get('count')).toBe(10);
+    expect(localStorage.getItem('slsm||count')).toBe('10');
+
+    localStore.set('count', () => 0);
+
+    expect(localStore.get('count')).toBe(0);
+    expect(localStorage.getItem('slsm||count')).toBeNull();
+  });
+
+  test('set to default works with session scoped items', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string;
+    }>({
+      getSessionId: () => 'test-session',
+      items: {
+        a: { schema: rc_string, default: 'default' },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    expect(localStore.get('a')).toBe('hello');
+    expect(localStorage.getItem('slsm-test-session||a')).toBe('"hello"');
+
+    localStore.set('a', 'default');
+
+    expect(localStore.get('a')).toBe('default');
+    expect(localStorage.getItem('slsm-test-session||a')).toBeNull();
+  });
+
+  test('set to default works with sessionStorage', () => {
+    const localStore = createSmartLocalStorage<{
+      a: string;
+    }>({
+      items: {
+        a: {
+          schema: rc_string,
+          default: 'default',
+          useSessionStorage: true,
+        },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    expect(localStore.get('a')).toBe('hello');
+    expect(sessionStorage.getItem('slsm|s||a')).toBe('"hello"');
+
+    localStore.set('a', 'default');
+
+    expect(localStore.get('a')).toBe('default');
+    expect(sessionStorage.getItem('slsm|s||a')).toBeNull();
+  });
+
+  test('set to default clears TTL state', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(TTL_BASE_MS);
+
+    const localStore = createSmartLocalStorage<{
+      a: string;
+    }>({
+      items: {
+        a: {
+          schema: rc_string,
+          default: 'default',
+          ttl: {
+            minutes: 5,
+          },
+        },
+      },
+    });
+
+    localStore.set('a', 'hello');
+
+    expect(localStorage.getItem('slsm||a')).not.toBeNull();
+
+    localStore.set('a', 'default');
+
+    expect(localStore.get('a')).toBe('default');
     expect(localStorage.getItem('slsm||a')).toBeNull();
 
     vi.useRealTimers();
@@ -1764,8 +1946,7 @@ describe('autoPruneBySize', () => {
       },
     });
 
-    localStore.set('chat', { messages: [] });
-
+    // Produce directly on default value - no need to set first
     localStore.produce('chat', (draft) => {
       for (let i = 0; i < 100; i++) {
         draft.messages.push(`Message ${i}`);
@@ -2372,3 +2553,4 @@ describe('direct store manipulation', () => {
     expect(result.items.length).toBeLessThan(200);
   });
 });
+
