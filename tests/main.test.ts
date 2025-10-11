@@ -1753,6 +1753,108 @@ describe('autoPruneBySize', () => {
   });
 });
 
+describe('auto-prune on initial load', () => {
+  test('autoPrune is applied when loading value from storage', () => {
+    localStorage.setItem('slsm||items', JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+
+    const localStore = createSmartLocalStorage<{
+      items: number[];
+    }>({
+      items: {
+        items: {
+          schema: rc_array(rc_number),
+          default: [],
+          autoPrune: (value) => {
+            if (value.length > 4) {
+              return value.slice(-4);
+            }
+            return value;
+          },
+        },
+      },
+    });
+
+    expect(localStore.get('items')).toEqual([7, 8, 9, 10]);
+    expect(JSON.parse(localStorage.getItem('slsm||items') ?? '[]')).toEqual([7, 8, 9, 10]);
+  });
+
+  test('autoPruneBySize is applied when loading oversized value from storage', () => {
+    mockQuota(Infinity);
+
+    type Item = { messages: string[] };
+
+    const largeMessages = Array.from({ length: 100 }, (_, i) => `Message ${i}`);
+    localStorage.setItem('slsm||chat', JSON.stringify({ messages: largeMessages }));
+
+    const localStore = createSmartLocalStorage<{
+      chat: Item;
+    }>({
+      items: {
+        chat: {
+          schema: rc_object({
+            messages: rc_array(rc_string),
+          }),
+          default: { messages: [] },
+          autoPruneBySize: {
+            maxKb: 1,
+            performPruneStep: (value) => ({
+              messages: value.messages.slice(1),
+            }),
+          },
+        },
+      },
+    });
+
+    const result = localStore.get('chat');
+    const resultSize = JSON.stringify(result).length;
+
+    expect(resultSize).toBeLessThanOrEqual(1024);
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(result.messages.length).toBeLessThan(largeMessages.length);
+    expect(result.messages[0]).not.toBe('Message 0');
+  });
+
+  test('both autoPrune and autoPruneBySize are applied on initial load', () => {
+    mockQuota(Infinity);
+
+    type Item = { messages: string[] };
+
+    const largeMessages = Array.from({ length: 100 }, (_, i) => `Message with long text ${i}`);
+    localStorage.setItem('slsm||chat', JSON.stringify({ messages: largeMessages }));
+
+    const localStore = createSmartLocalStorage<{
+      chat: Item;
+    }>({
+      items: {
+        chat: {
+          schema: rc_object({
+            messages: rc_array(rc_string),
+          }),
+          default: { messages: [] },
+          autoPrune: (value) => {
+            if (value.messages.length > 50) {
+              return { messages: value.messages.slice(-50) };
+            }
+            return value;
+          },
+          autoPruneBySize: {
+            maxKb: 1,
+            performPruneStep: (value) => ({
+              messages: value.messages.slice(1),
+            }),
+          },
+        },
+      },
+    });
+
+    const result = localStore.get('chat');
+    const resultSize = JSON.stringify(result).length;
+
+    expect(result.messages.length).toBeLessThanOrEqual(50);
+    expect(resultSize).toBeLessThanOrEqual(1024);
+  });
+});
+
 describe('direct store manipulation', () => {
   test('getStore().setState() persists to localStorage', () => {
     const localStore = createSmartLocalStorage<{

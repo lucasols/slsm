@@ -12,6 +12,10 @@ import {
 } from 'runcheck';
 import { Store } from 't-state';
 
+type SyncDelay =
+  | { type: 'debounce'; ms: number }
+  | { type: 'onIdleCallback'; timeoutMs: number };
+
 type Compress = {
   /**
    * Function to compress the raw JSON string, should return a compressed string format
@@ -71,6 +75,10 @@ type ItemOptions<V> = {
    * The compress function to use for the item
    */
   compress?: Compress;
+  /**
+   * Delay storage sync to the store
+   */
+  syncDelay?: SyncDelay;
 };
 
 type ItemTtlOption<V> = NonNullable<ItemOptions<V>['ttl']>;
@@ -107,6 +115,10 @@ type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
    * Global compress function to use for all items
    */
   compress?: Compress;
+  /**
+   * Global sync delay to use for all items
+   */
+  syncDelay?: SyncDelay;
 };
 
 type ValueOrSetter<T> = T | ((currentValue: T) => T);
@@ -172,6 +184,7 @@ export function createSmartLocalStorage<
   getSessionId = () => '',
   items,
   compress,
+  syncDelay,
 }: SmartLocalStorageOptions<Schemas>): SmartLocalStorage<Schemas> {
   const IS_BROWSER = typeof window !== 'undefined';
 
@@ -798,7 +811,12 @@ export function createSmartLocalStorage<
 
     if (!store) {
       const initial = getInitialValue(key, storageKey);
-      const initialState = initial?.value ?? items[key].default;
+      let initialState = initial?.value ?? items[key].default;
+
+      // Apply auto-pruning on initial load
+      const prunedInitialState = applyAutoPrune(key, initialState);
+      const wasPruned = prunedInitialState !== initialState;
+      initialState = prunedInitialState;
 
       store = new Store<Schemas[K]>({
         state: initialState,
@@ -810,9 +828,14 @@ export function createSmartLocalStorage<
         setTtlState(storageKey, key, initial.metadata);
       }
 
-      if (items[key].ttl && initial?.shouldPersist && initial.metadata) {
+      // Persist if TTL metadata was synthesized or if auto-pruning changed the value
+      const shouldPersist =
+        (items[key].ttl && initial?.shouldPersist && initial.metadata) ||
+        wasPruned;
+
+      if (shouldPersist) {
         persistValue(key, initialState, storageKey, {
-          metadataOverride: initial.metadata,
+          metadataOverride: initial?.metadata,
           source: 'cleanup',
         });
       }
@@ -1172,11 +1195,15 @@ function getStorageItemKeys(storage: Storage, except: string | undefined) {
   return keys;
 }
 
-function requestIdleCallback(callback: () => void) {
+function requestIdleCallback(
+  callback: () => void,
+  timeoutMs?: number,
+): VoidFunction {
   if ('requestIdleCallback' in globalThis) {
-    globalThis.requestIdleCallback(callback);
-    return;
+    const id = globalThis.requestIdleCallback(callback, { timeout: timeoutMs });
+    return () => globalThis.cancelIdleCallback(id);
   }
 
-  setTimeout(callback, 50);
+  const id = setTimeout(callback, 50);
+  return () => clearTimeout(id);
 }
