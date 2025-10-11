@@ -179,6 +179,7 @@ export function createSmartLocalStorage<
 
   const ttlStates = new Map<string, TtlState<Items>>();
   const itemStores = new Map<string, Store<any>>();
+  const isInternalUpdate = new Map<string, boolean>();
 
   if (IS_BROWSER) {
     requestIdleCallback(function handleIdleCleanup() {
@@ -581,6 +582,7 @@ export function createSmartLocalStorage<
 
       const scopedKey = getLocalStorageItemKey(itemKey);
       if (scopedKey && scopedKey === storageKey) {
+        isInternalUpdate.set(storageKey, true);
         const store = getStore(itemKey);
         store.setState(items[itemKey].default);
       }
@@ -592,6 +594,7 @@ export function createSmartLocalStorage<
       const scopedKey = getLocalStorageItemKey(itemKey);
 
       if (scopedKey && scopedKey === storageKey) {
+        isInternalUpdate.set(storageKey, true);
         const store = getStore(itemKey);
         store.setState(klona(evaluation.value), { equalityCheck: deepEqual });
         persistValue(itemKey, evaluation.value, storageKey, {
@@ -813,6 +816,24 @@ export function createSmartLocalStorage<
           source: 'cleanup',
         });
       }
+
+      // Use middleware to apply transformations and persist changes
+      store.addMiddleware(({ next }) => {
+        // Skip if this is an internal update (from storage, TTL cleanup, etc.)
+        if (isInternalUpdate.get(storageKey)) {
+          isInternalUpdate.set(storageKey, false);
+          return true; // Allow the update without transformation
+        }
+
+        // Apply auto-pruning to the next state
+        const prunedValue = applyAutoPrune(key, next);
+
+        // Persist the pruned value
+        persistValue(key, prunedValue, storageKey, { source: 'mutation' });
+
+        // Return pruned value if it changed, otherwise allow the update
+        return prunedValue !== next ? prunedValue : true;
+      });
     }
 
     return store;
@@ -828,6 +849,7 @@ export function createSmartLocalStorage<
 
     const scopedKey = getLocalStorageItemKey(itemKey);
     if (scopedKey && scopedKey === storageKey) {
+      isInternalUpdate.set(storageKey, true);
       const store = getStore(itemKey);
       store.setState(items[itemKey].default);
     }
@@ -967,12 +989,9 @@ export function createSmartLocalStorage<
 
     const store = getStore(key);
     const currentValue = store.state;
-    const nextValueInput = isFunction(value) ? value(currentValue) : value;
+    const nextValue = isFunction(value) ? value(currentValue) : value;
 
-    const finalValue = applyAutoPrune(key, nextValueInput);
-    store.setState(klona(finalValue), { equalityCheck: deepEqual });
-
-    persistValue(key, finalValue, storageKey, { source: 'mutation' });
+    store.setState(klona(nextValue), { equalityCheck: deepEqual });
   }
 
   if (IS_BROWSER) {
@@ -986,6 +1005,7 @@ export function createSmartLocalStorage<
       const itemOptions = items[itemKey];
       if (!itemOptions.syncTabsState) return;
 
+      isInternalUpdate.set(storageKey, true);
       const store = getStore(itemKey);
 
       if (event.newValue === null) {
@@ -1039,6 +1059,7 @@ export function createSmartLocalStorage<
     storage.removeItem(storageKey);
     clearTtlState(storageKey);
 
+    isInternalUpdate.set(storageKey, true);
     const store = getStore(key);
     store.setState(items[key].default);
   }
@@ -1046,6 +1067,7 @@ export function createSmartLocalStorage<
   function resetStoreToDefault(storageKey: string) {
     const itemKey = getItemKeyFromStorageKey(storageKey);
     if (itemKey) {
+      isInternalUpdate.set(storageKey, true);
       const store = getStore(itemKey);
       store.setState(items[itemKey].default);
     }
@@ -1065,12 +1087,6 @@ export function createSmartLocalStorage<
         const result = recipe(draft);
         return result !== undefined ? result : draft;
       });
-
-      let finalValue = store.state;
-      finalValue = applyAutoPrune(key, finalValue);
-      store.setState(klona(finalValue), { equalityCheck: deepEqual });
-
-      persistValue(key, finalValue, storageKey, { source: 'mutation' });
     },
 
     delete: (key) => {
