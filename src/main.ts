@@ -1235,6 +1235,42 @@ export function createSmartLocalStorage<
       });
     },
 
+    produceWithNullableFallback: (key, nullableFallback, recipe) => {
+      const storageKey = getLocalStorageItemKey(key);
+      if (!storageKey) return;
+
+      const store = getStore(key);
+
+      store.batch(() => {
+        let currentValue: Schemas[typeof key];
+
+        try {
+          currentValue = store.state;
+        } catch {
+          // If store.state throws (e.g., when default is undefined), use the default
+          currentValue = items[key].default;
+        }
+
+        if (currentValue === null || currentValue === undefined) {
+          // Use fallback - create a copy and work with it directly
+          const workingCopy = klona(nullableFallback);
+          const result = recipe(workingCopy);
+          const finalValue = result !== undefined ? result : workingCopy;
+          store.setState(finalValue, { equalityCheck: deepEqual });
+        } else {
+          // Use current value with produceState
+          store.produceState((draft) => {
+            // Check runtime to ensure draft is not null/undefined before calling recipe
+            if (draft !== null && draft !== undefined) {
+              const result = recipe(draft);
+              return result !== undefined ? result : draft;
+            }
+            return draft;
+          });
+        }
+      });
+    },
+
     delete: (key) => {
       deleteItem(key);
     },
