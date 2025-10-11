@@ -57,6 +57,9 @@ importers:
       eslint-plugin-vitest:
         specifier: ^0.5.4
         version: 0.5.4(@typescript-eslint/eslint-plugin@8.46.0(@typescript-eslint/parser@8.46.0(eslint@9.37.0)(typescript@5.9.3))(eslint@9.37.0)(typescript@5.9.3))(eslint@9.37.0)(typescript@5.9.3)(vitest@3.2.4)
+      fflate:
+        specifier: ^0.8.2
+        version: 0.8.2
       happy-dom:
         specifier: ^20.0.0
         version: 20.0.0

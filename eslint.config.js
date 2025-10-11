@@ -9,4 +9,14 @@ export default lsStackEslintCfg({
     '@typescript-eslint/no-explicit-any': OFF,
     '@typescript-eslint/no-unsafe-assignment': OFF,
   },
+  extraRuleGroups: [
+    {
+      files: ['tests/**/*.test.{ts,tsx}'],
+      rules: {
+        '@typescript-eslint/consistent-type-assertions': OFF,
+        '@typescript-eslint/no-non-null-assertion': OFF,
+        '@typescript-eslint/no-unsafe-member-access': OFF,
+      },
+    },
+  ],
 });

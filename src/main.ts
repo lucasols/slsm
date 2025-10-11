@@ -557,11 +557,34 @@ export function createSmartLocalStorage<
       const maxBytes = maxKb * 1024;
 
       let serialized = JSON.stringify(nextValue);
+      let previousSize = serialized.length;
+      const MAX_ITERATIONS = 1000;
+      let iterations = 0;
+
       while (serialized.length > maxBytes) {
+        if (iterations >= MAX_ITERATIONS) {
+          console.error(
+            `[slsm] autoPruneBySize: max iterations (${MAX_ITERATIONS}) reached for key "${String(key)}". Prune canceled.`,
+          );
+          break;
+        }
+
         const pruned = performPruneStep(nextValue);
         if (pruned === nextValue) break;
         nextValue = pruned;
         serialized = JSON.stringify(nextValue);
+        const currentSize = serialized.length;
+
+        if (currentSize >= previousSize) {
+          console.error(
+            `[slsm] autoPruneBySize: prune step ${currentSize >= previousSize && currentSize > previousSize ? 'increased' : 'did not decrease'} the size for key "${String(key)}" (from ${previousSize} to ${currentSize} bytes). Prune canceled.`,
+          );
+          nextValue = value;
+          break;
+        }
+
+        previousSize = currentSize;
+        iterations++;
       }
     }
 
