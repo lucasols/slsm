@@ -19,6 +19,11 @@ beforeEach(() => {
   reset();
 });
 
+const TTL_BASE_MS = Date.UTC(2025, 0, 1);
+const MS_PER_MINUTE = 60_000;
+const toMinuteStamp = (timestamp: number) =>
+  Math.round((timestamp - TTL_BASE_MS) / MS_PER_MINUTE);
+
 test('set and read a value in store', () => {
   const localStore = createSmartLocalStorage<{
     a: string;
@@ -478,7 +483,7 @@ test('item validation', () => {
 describe('ttl', () => {
   test('persists ttl envelope metadata', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(0);
+    vi.setSystemTime(TTL_BASE_MS);
 
     const localStore = createSmartLocalStorage<{
       a: string;
@@ -488,7 +493,7 @@ describe('ttl', () => {
           schema: rc_string,
           default: '',
           ttl: {
-            ms: 1_000,
+            minutes: 1,
           },
         },
       },
@@ -497,20 +502,21 @@ describe('ttl', () => {
     localStore.set('a', 'hello');
 
     const stored = JSON.parse(localStorage.getItem('slsm||a') ?? '{}') as {
-      _: { t: number; p?: Record<string, number> };
+      t: number;
+      p?: Record<string, number>;
       v: unknown;
     };
 
     expect(stored.v).toBe('hello');
-    expect(stored._.t).toBe(0);
-    expect(stored._.p).toBeUndefined();
+    expect(stored.t).toBe(toMinuteStamp(TTL_BASE_MS));
+    expect(stored.p).toBeUndefined();
 
     vi.useRealTimers();
   });
 
   test('whole item ttl expires after duration', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(0);
+    vi.setSystemTime(TTL_BASE_MS);
 
     const localStore = createSmartLocalStorage<{
       a: string;
@@ -520,7 +526,7 @@ describe('ttl', () => {
           schema: rc_string,
           default: '',
           ttl: {
-            ms: 1_000,
+            minutes: 1,
           },
         },
       },
@@ -528,8 +534,8 @@ describe('ttl', () => {
 
     localStore.set('a', 'hello');
 
-    vi.advanceTimersByTime(1_200);
-    vi.setSystemTime(1_200);
+    vi.advanceTimersByTime(2 * MS_PER_MINUTE);
+    vi.setSystemTime(TTL_BASE_MS + 2 * MS_PER_MINUTE);
 
     expect(localStore.get('a')).toBe('');
     expect(localStorage.getItem('slsm||a')).toBeNull();
@@ -539,7 +545,7 @@ describe('ttl', () => {
 
   test('part ttl prunes expired segments', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(0);
+    vi.setSystemTime(TTL_BASE_MS);
 
     const localStore = createSmartLocalStorage<{
       feed: string[];
@@ -549,7 +555,7 @@ describe('ttl', () => {
           schema: rc_array(rc_string),
           default: [],
           ttl: {
-            ms: 1_000,
+            minutes: 1,
             splitIntoParts: (value) => value,
             removePart: (value, partKey) =>
               value.filter((entry) => entry !== partKey),
@@ -560,35 +566,34 @@ describe('ttl', () => {
 
     localStore.set('feed', ['alpha']);
 
-    vi.advanceTimersByTime(500);
-    vi.setSystemTime(500);
+    vi.setSystemTime(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2);
 
     localStore.set('feed', ['alpha', 'beta']);
 
-    vi.advanceTimersByTime(600);
-    vi.setSystemTime(1_100);
+    vi.setSystemTime(TTL_BASE_MS + 2 * MS_PER_MINUTE - 1);
 
     expect(localStore.get('feed')).toEqual(['beta']);
 
     const stored = JSON.parse(localStorage.getItem('slsm||feed') ?? '{}') as {
-      _: { t: number; p?: Record<string, number> };
+      t: number;
+      p?: Record<string, number>;
       v: string[];
     };
 
     expect(stored.v).toEqual(['beta']);
-    expect(stored._.p).toEqual({ beta: 500 });
+    expect(stored.p).toEqual({ beta: toMinuteStamp(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2) });
 
     vi.useRealTimers();
   });
 
   test('startup sweep removes expired ttl items', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(5_000);
+    vi.setSystemTime(TTL_BASE_MS + 5 * MS_PER_MINUTE);
 
     localStorage.setItem(
       'slsm||a',
       JSON.stringify({
-        _: { t: 0 },
+        t: toMinuteStamp(TTL_BASE_MS - MS_PER_MINUTE),
         v: 'stale',
       }),
     );
@@ -601,7 +606,7 @@ describe('ttl', () => {
           schema: rc_string,
           default: '',
           ttl: {
-            ms: 1_000,
+            minutes: 1,
           },
         },
       },
@@ -615,12 +620,16 @@ describe('ttl', () => {
 
   test('initial load prunes expired ttl parts', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(1_200);
+    vi.setSystemTime(TTL_BASE_MS + 2 * MS_PER_MINUTE);
 
     localStorage.setItem(
       'slsm||feed',
       JSON.stringify({
-        _: { t: 600, p: { old: 0, fresh: 600 } },
+        t: toMinuteStamp(TTL_BASE_MS + 2 * MS_PER_MINUTE),
+        p: {
+          old: toMinuteStamp(TTL_BASE_MS - MS_PER_MINUTE),
+          fresh: toMinuteStamp(TTL_BASE_MS + 2 * MS_PER_MINUTE),
+        },
         v: ['old', 'fresh'],
       }),
     );
@@ -633,7 +642,7 @@ describe('ttl', () => {
           schema: rc_array(rc_string),
           default: [],
           ttl: {
-            ms: 1_000,
+            minutes: 1,
             splitIntoParts: (value) => value,
             removePart: (value, partKey) =>
               value.filter((entry) => entry !== partKey),
@@ -645,19 +654,20 @@ describe('ttl', () => {
     expect(localStore.get('feed')).toEqual(['fresh']);
 
     const stored = JSON.parse(localStorage.getItem('slsm||feed') ?? '{}') as {
-      _: { t: number; p?: Record<string, number> };
+      t: number;
+      p?: Record<string, number>;
       v: string[];
     };
 
     expect(stored.v).toEqual(['fresh']);
-    expect(stored._.p).toEqual({ fresh: 600 });
+    expect(stored.p).toEqual({ fresh: toMinuteStamp(TTL_BASE_MS + 2 * MS_PER_MINUTE) });
 
     vi.useRealTimers();
   });
 
   test('storage event clears expired ttl entry', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(0);
+    vi.setSystemTime(TTL_BASE_MS);
 
     const localStore = createSmartLocalStorage<{
       a: string;
@@ -668,7 +678,7 @@ describe('ttl', () => {
           default: '',
           syncTabsState: true,
           ttl: {
-            ms: 1_000,
+            minutes: 1,
           },
         },
       },
@@ -676,10 +686,10 @@ describe('ttl', () => {
 
     localStore.set('a', 'fresh');
 
-    vi.setSystemTime(2_000);
+    vi.setSystemTime(TTL_BASE_MS + 2 * MS_PER_MINUTE);
 
     const expiredEnvelope = JSON.stringify({
-      _: { t: 0 },
+      t: toMinuteStamp(TTL_BASE_MS - MS_PER_MINUTE),
       v: 'stale',
     });
 
@@ -707,7 +717,7 @@ describe('ttl', () => {
           schema: rc_string,
           default: '',
           ttl: {
-            ms: 1_000,
+            minutes: 1,
           },
         },
         retained: { schema: rc_string, default: '' },
@@ -753,7 +763,7 @@ describe('ttl', () => {
 
   test('produce refreshes ttl timestamp', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(0);
+    vi.setSystemTime(TTL_BASE_MS);
 
     const localStore = createSmartLocalStorage<{
       counter: { value: number };
@@ -765,7 +775,7 @@ describe('ttl', () => {
           }),
           default: { value: 0 },
           ttl: {
-            ms: 10_000,
+            minutes: 5,
           },
         },
       },
@@ -773,18 +783,19 @@ describe('ttl', () => {
 
     localStore.set('counter', { value: 1 });
 
-    vi.setSystemTime(5_000);
+    vi.setSystemTime(TTL_BASE_MS + 5 * MS_PER_MINUTE);
 
     localStore.produce('counter', (draft) => {
       draft.value += 1;
     });
 
     const stored = JSON.parse(localStorage.getItem('slsm||counter') ?? '{}') as {
-      _: { t: number };
+      t: number;
+      p?: Record<string, number>;
       v: { value: number };
     };
 
-    expect(stored._.t).toBe(5_000);
+    expect(stored.t).toBe(toMinuteStamp(TTL_BASE_MS + 5 * MS_PER_MINUTE));
     expect(stored.v).toEqual({ value: 2 });
 
     vi.useRealTimers();
@@ -792,7 +803,7 @@ describe('ttl', () => {
 
   test('raw value is wrapped into ttl envelope on load', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(2_000);
+    vi.setSystemTime(TTL_BASE_MS + 2 * MS_PER_MINUTE);
 
     localStorage.setItem('slsm||legacy', '"hello"');
 
@@ -804,7 +815,7 @@ describe('ttl', () => {
           schema: rc_string,
           default: '',
           ttl: {
-            ms: 5_000,
+            minutes: 2,
           },
         },
       },
@@ -813,19 +824,20 @@ describe('ttl', () => {
     expect(localStore.get('legacy')).toBe('hello');
 
     const stored = JSON.parse(localStorage.getItem('slsm||legacy') ?? '{}') as {
-      _: { t: number };
+      t: number;
+      p?: Record<string, number>;
       v: string;
     };
 
     expect(stored.v).toBe('hello');
-    expect(stored._.t).toBe(2_000);
+    expect(stored.t).toBe(toMinuteStamp(TTL_BASE_MS + 2 * MS_PER_MINUTE));
 
     vi.useRealTimers();
   });
 
   test('part ttl removes missing parts on set', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(0);
+    vi.setSystemTime(TTL_BASE_MS);
 
     const localStore = createSmartLocalStorage<{
       feed: string[];
@@ -835,7 +847,7 @@ describe('ttl', () => {
           schema: rc_array(rc_string),
           default: [],
           ttl: {
-            ms: 1_000,
+            minutes: 1,
             splitIntoParts: (value) => value,
             removePart: (value, partKey) =>
               value.filter((entry) => entry !== partKey),
@@ -844,37 +856,45 @@ describe('ttl', () => {
       },
     });
 
-    localStore.set('feed', ['a', 'b']);
+    localStore.set('feed', ['a']);
 
     const firstStored = JSON.parse(
       localStorage.getItem('slsm||feed') ?? '{}',
     ) as {
-      _: { t: number; p?: Record<string, number> };
+      t: number;
+      p?: Record<string, number>;
       v: string[];
     };
 
-    expect(firstStored._.p).toEqual({ a: 0, b: 0 });
+    expect(firstStored.t).toBe(toMinuteStamp(TTL_BASE_MS));
+    expect(firstStored.p).toEqual({ a: toMinuteStamp(TTL_BASE_MS) });
 
-    vi.setSystemTime(500);
+    vi.setSystemTime(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2);
 
-    localStore.set('feed', ['b']);
+    localStore.set('feed', ['a', 'b']);
+
+    vi.setSystemTime(TTL_BASE_MS + 2 * MS_PER_MINUTE - 1);
+
+    expect(localStore.get('feed')).toEqual(['b']);
 
     const secondStored = JSON.parse(
       localStorage.getItem('slsm||feed') ?? '{}',
     ) as {
-      _: { t: number; p?: Record<string, number> };
+      t: number;
+      p?: Record<string, number>;
       v: string[];
     };
 
+    expect(secondStored.t).toBe(toMinuteStamp(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2));
     expect(secondStored.v).toEqual(['b']);
-    expect(secondStored._.p).toEqual({ b: 0 });
+    expect(secondStored.p).toEqual({ b: toMinuteStamp(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2) });
 
     vi.useRealTimers();
   });
 
   test('session storage ttl expires item and clears entry', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(0);
+    vi.setSystemTime(TTL_BASE_MS);
 
     const localStore = createSmartLocalStorage<{
       sessionItem: string;
@@ -885,7 +905,7 @@ describe('ttl', () => {
           default: '',
           useSessionStorage: true,
           ttl: {
-            ms: 1_000,
+            minutes: 1,
           },
         },
       },
@@ -895,7 +915,7 @@ describe('ttl', () => {
 
     expect(sessionStorage.getItem('slsm|s||sessionItem')).not.toBeNull();
 
-    vi.setSystemTime(2_000);
+    vi.setSystemTime(TTL_BASE_MS + 2 * MS_PER_MINUTE);
 
     expect(localStore.get('sessionItem')).toBe('');
     expect(sessionStorage.getItem('slsm|s||sessionItem')).toBeNull();

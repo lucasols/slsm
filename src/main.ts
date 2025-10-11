@@ -2,7 +2,13 @@ import { sortBy } from '@lucasols/utils/arrayUtils';
 import { isFunction } from '@lucasols/utils/assertions';
 import { deepEqual } from '@lucasols/utils/deepEqual';
 import { klona } from 'klona';
-import { RcType } from 'runcheck';
+import {
+  rc_number,
+  rc_obj_builder,
+  rc_record,
+  rc_unknown,
+  RcType,
+} from 'runcheck';
 import { Store } from 't-state';
 
 type Compress = {
@@ -34,15 +40,15 @@ type ItemOptions<V> = {
   ttl?:
     | {
         /**
-         * The minimum time in milliseconds to keep the item in storage
+         * The minimum time in minutes to keep the item in storage
          */
-        ms: number;
+        minutes: number;
       }
     | {
         /**
-         * The minimum time in milliseconds to keep the item part in storage
+         * The minimum time in minutes to keep the item part in storage
          */
-        ms: number;
+        minutes: number;
         /**
          * Allows to split the items into parts, and remove the part when the TTL expires
          */
@@ -103,6 +109,33 @@ type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
 };
 
 type ValueOrSetter<T> = T | ((currentValue: T) => T);
+
+type Envelope = {
+  t?: number;
+  p?: Record<string, number>;
+  v: unknown;
+};
+
+const envelopeSchema = rc_obj_builder<Envelope>()({
+  t: rc_number.optional(),
+  p: rc_record(rc_number).optional(),
+  v: rc_unknown,
+});
+
+const MS_PER_MINUTE = 60_000;
+const TTL_REFERENCE_EPOCH_MS = Date.UTC(2025, 0, 1);
+
+function toEnvelopeMinutes(timestamp: number): number {
+  return Math.round((timestamp - TTL_REFERENCE_EPOCH_MS) / MS_PER_MINUTE);
+}
+
+function fromEnvelopeMinutes(minuteStamp: number): number {
+  return TTL_REFERENCE_EPOCH_MS + minuteStamp * MS_PER_MINUTE;
+}
+
+function getTtlDurationMs<V>(ttl: ItemTtlOption<V>): number {
+  return ttl.minutes * MS_PER_MINUTE;
+}
 
 type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
   set: <K extends keyof Schemas>(
@@ -201,36 +234,26 @@ export function createSmartLocalStorage<
     return storageKey.split('||')[1];
   }
 
-  function sanitizeParts(parts: unknown) {
-    if (typeof parts !== 'object' || parts === null) return undefined;
-    const sanitized: Record<string, number> = {};
-    for (const key of Reflect.ownKeys(parts)) {
-      if (typeof key !== 'string') continue;
-      const timestamp = Reflect.get(parts, key);
-      if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
-        sanitized[key] = timestamp;
-      }
-    }
-    return Object.keys(sanitized).length === 0 ? undefined : sanitized;
-  }
-
   function createEnvelopePayload<K extends Items>(
     key: K,
     value: Schemas[K],
     metadata: TtlMetadata,
   ) {
-    const metadataPayload: { t: number; p?: Record<string, number> } = {
-      t: metadata.updatedAt,
-    };
-
-    if (metadata.parts && Object.keys(metadata.parts).length > 0) {
-      metadataPayload.p = metadata.parts;
-    }
-
-    return {
-      _: metadataPayload,
+    const payload: Envelope = {
       v: value,
     };
+
+    payload.t = toEnvelopeMinutes(metadata.updatedAt);
+
+    if (metadata.parts && Object.keys(metadata.parts).length > 0) {
+      const partsMinutes: Record<string, number> = {};
+      for (const [partKey, timestamp] of Object.entries(metadata.parts)) {
+        partsMinutes[partKey] = toEnvelopeMinutes(timestamp);
+      }
+      payload.p = partsMinutes;
+    }
+
+    return payload;
   }
 
   function parseStoredValue<K extends Items>(
@@ -246,41 +269,34 @@ export function createSmartLocalStorage<
       return undefined;
     }
 
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      Reflect.has(parsed, '_') &&
-      Reflect.has(parsed, 'v')
-    ) {
-      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- parsed envelope is validated as an object above
-      const parsedRecord = parsed as Record<string, unknown>;
-      const metadataSource = parsedRecord._;
-      const valueSource = parsedRecord.v;
+    const envelopeResult = envelopeSchema.parse(parsed);
+    if (!envelopeResult.errors) {
+      const envelope = envelopeResult.value;
 
-      if (typeof metadataSource !== 'object' || metadataSource === null) {
-        return undefined;
+      if (envelope.t !== undefined) {
+        const validationResult = items[key].schema.parse(envelope.v);
+        if (validationResult.errors) {
+          console.error('[slsm] error parsing value', validationResult.errors);
+          return undefined;
+        }
+
+        const partsMetadata = envelope.p;
+        let parts: Record<string, number> | undefined;
+        if (partsMetadata && Object.keys(partsMetadata).length > 0) {
+          parts = {};
+          for (const [partKey, minuteStamp] of Object.entries(partsMetadata)) {
+            parts[partKey] = fromEnvelopeMinutes(minuteStamp);
+          }
+        }
+
+        return {
+          value: validationResult.value,
+          metadata: {
+            updatedAt: fromEnvelopeMinutes(envelope.t),
+            parts,
+          },
+        };
       }
-
-      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- metadata container uses dynamic keys from stored payload
-      const metadataRecord = metadataSource as Record<string, unknown>;
-      const updatedAt = metadataRecord.t;
-      if (typeof updatedAt !== 'number') return undefined;
-
-      const partsCandidate = metadataRecord.p;
-
-      const validationResult = items[key].schema.parse(valueSource);
-      if (validationResult.errors) {
-        console.error('[slsm] error parsing value', validationResult.errors);
-        return undefined;
-      }
-
-      return {
-        value: validationResult.value,
-        metadata: {
-          updatedAt,
-          parts: sanitizeParts(partsCandidate),
-        },
-      };
     }
 
     const validationResult = items[key].schema.parse(parsed);
@@ -328,7 +344,8 @@ export function createSmartLocalStorage<
     metadata: TtlMetadata;
   } {
     if (!('splitIntoParts' in ttl)) {
-      const expired = now - metadata.updatedAt >= ttl.ms;
+      const expired =
+        now - metadata.updatedAt >= getTtlDurationMs(ttl);
       return { expired, changed: false, value, metadata };
     }
 
@@ -336,7 +353,7 @@ export function createSmartLocalStorage<
     const expiredParts: string[] = [];
 
     for (const [partKey, lastUpdated] of Object.entries(parts)) {
-      if (now - lastUpdated >= ttl.ms) {
+      if (now - lastUpdated >= getTtlDurationMs(ttl)) {
         expiredParts.push(partKey);
       }
     }
@@ -384,12 +401,13 @@ export function createSmartLocalStorage<
     if ('splitIntoParts' in ttl) {
       const partTimes = state.parts ? Object.values(state.parts) : [];
       if (partTimes.length > 0) {
+        const ttlDuration = getTtlDurationMs(ttl);
         nextExpiry = Math.min(
-          ...partTimes.map((timestamp) => timestamp + ttl.ms),
+          ...partTimes.map((timestamp) => timestamp + ttlDuration),
         );
       }
     } else {
-      nextExpiry = state.updatedAt + ttl.ms;
+      nextExpiry = state.updatedAt + getTtlDurationMs(ttl);
     }
 
     if (nextExpiry === undefined) return;
