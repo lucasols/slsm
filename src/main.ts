@@ -2,8 +2,23 @@ import { sortBy } from '@lucasols/utils/arrayUtils';
 import { isFunction } from '@lucasols/utils/assertions';
 import { deepEqual } from '@lucasols/utils/deepEqual';
 import { klona } from 'klona';
-import { RcType, rc_parse_json } from 'runcheck';
+import { RcType } from 'runcheck';
 import { Store } from 't-state';
+
+type Compress = {
+  /**
+   * Function to compress the raw JSON string, should return a compressed string format
+   */
+  compressFn: (rawJsonString: string) => string;
+  /**
+   * Function to decompress the compressed string format, should return a raw JSON string
+   */
+  decompressFn: (compressedJsonString: string) => string;
+  /**
+   * Id to identify the compressed format
+   */
+  format: string;
+};
 
 type ItemOptions<V> = {
   schema: RcType<V>;
@@ -16,7 +31,64 @@ type ItemOptions<V> = {
   priority?: number;
   ignoreSessionId?: boolean;
   useSessionStorage?: boolean;
+  ttl?:
+    | {
+        /**
+         * The minimum time in milliseconds to keep the item in storage
+         */
+        ms: number;
+      }
+    | {
+        /**
+         * The minimum time in milliseconds to keep the item part in storage
+         */
+        ms: number;
+        /**
+         * Allows to split the items into parts, and remove the part when the TTL expires
+         */
+        splitIntoParts: (value: V) => string[];
+        /**
+         * Function to remove the part when the TTL expires
+         */
+        removePart: (value: V, partKey: string) => V;
+      };
   autoPrune?: (value: V) => V;
+  /**
+   * If the item is larger than the maxKb, the item will be pruned by calling a function repeatedly until the item is smaller than the maxKb
+   */
+  autoPruneBySize?: {
+    maxKb: number;
+    performPruneStep: (value: V) => V;
+  };
+  /**
+   * The compress function to use for the item
+   */
+  compress?: Compress;
+};
+
+type ItemTtlOption<V> = NonNullable<ItemOptions<V>['ttl']>;
+
+type TtlMetadata = {
+  updatedAt: number;
+  parts?: Record<string, number>;
+};
+
+type TtlState<Items extends PropertyKey> = {
+  key: Items;
+  updatedAt: number;
+  parts?: Record<string, number>;
+  timerId?: ReturnType<typeof setTimeout>;
+};
+
+type ParsedStorageValue<V> = {
+  value: V;
+  metadata: TtlMetadata | undefined;
+};
+
+type InitialReadResult<V> = {
+  value: V;
+  metadata: TtlMetadata | undefined;
+  shouldPersist: boolean;
 };
 
 type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
@@ -24,6 +96,10 @@ type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
   items: {
     [K in keyof Schemas]: ItemOptions<Schemas[K]>;
   };
+  /**
+   * Global compress function to use for all items
+   */
+  compress?: Compress;
 };
 
 type ValueOrSetter<T> = T | ((currentValue: T) => T);
@@ -33,7 +109,6 @@ type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
     key: K,
     value: ValueOrSetter<Schemas[K]>,
   ) => void;
-  setUnknownValue: (key: string, value: unknown) => void;
   get: <K extends keyof Schemas>(key: K) => Schemas[K];
   produce: <K extends keyof Schemas>(
     key: K,
@@ -60,29 +135,45 @@ export function createSmartLocalStorage<
 >({
   getSessionId = () => '',
   items,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- will be implemented later
+  compress,
 }: SmartLocalStorageOptions<Schemas>): SmartLocalStorage<Schemas> {
   const IS_BROWSER = typeof window !== 'undefined';
 
   type Items = keyof Schemas;
 
+  const ttlStates = new Map<string, TtlState<Items>>();
+  const itemStores = new Map<string, Store<any>>();
+
   if (IS_BROWSER) {
-    requestIdleCallback(() => {
-      function cleanStorage(storage: Storage) {
-        for (const storageKey of getStorageItemKeys(storage)) {
-          const itemKey = storageKey.split('||')[1];
+    requestIdleCallback(function handleIdleCleanup() {
+      function sweepStorage(storage: Storage) {
+        for (const storageKey of getStorageItemKeys(storage, undefined)) {
+          const itemKey = getItemKeyFromStorageKey(storageKey);
 
-          if (itemKey) {
-            const isConfigured = !!items[itemKey];
+          if (!itemKey) {
+            storage.removeItem(storageKey);
+            clearTtlState(storageKey);
+            continue;
+          }
 
-            if (!isConfigured) {
-              localStorage.removeItem(storageKey);
-            }
+          const itemOptions = items[itemKey];
+
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- storage may contain keys removed from configuration
+          if (!itemOptions) {
+            storage.removeItem(storageKey);
+            clearTtlState(storageKey);
+            continue;
+          }
+
+          if (itemOptions.ttl) {
+            runTtlCleanup(storageKey, Date.now());
           }
         }
       }
 
-      cleanStorage(localStorage);
-      cleanStorage(sessionStorage);
+      sweepStorage(localStorage);
+      sweepStorage(sessionStorage);
     });
   }
 
@@ -90,11 +181,13 @@ export function createSmartLocalStorage<
     return items[key].useSessionStorage ? sessionStorage : localStorage;
   }
 
+  function getStorageForKey(storageKey: string) {
+    return storageKey.includes('|s||') ? sessionStorage : localStorage;
+  }
+
   function getLocalStorageItemKey(key: Items) {
     const itemOptions = items[key];
-
     const usesDefaultSessionId = itemOptions.ignoreSessionId;
-
     const sessionId = usesDefaultSessionId ? '' : getSessionId();
 
     if (sessionId === false) return false;
@@ -104,72 +197,514 @@ export function createSmartLocalStorage<
     }||${String(key)}`;
   }
 
-  function getInitialValue<K extends Items>(key: K): Schemas[K] | undefined {
-    if (!IS_BROWSER) return undefined;
+  function getItemKeyFromStorageKey(storageKey: string): Items | undefined {
+    return storageKey.split('||')[1];
+  }
 
-    const itemKey = getLocalStorageItemKey(key);
-    if (!itemKey) return undefined;
+  function sanitizeParts(parts: unknown) {
+    if (typeof parts !== 'object' || parts === null) return undefined;
+    const sanitized: Record<string, number> = {};
+    for (const key of Reflect.ownKeys(parts)) {
+      if (typeof key !== 'string') continue;
+      const timestamp = Reflect.get(parts, key);
+      if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+        sanitized[key] = timestamp;
+      }
+    }
+    return Object.keys(sanitized).length === 0 ? undefined : sanitized;
+  }
 
-    const itemStorage = getItemStorage(key);
-    const itemValue = itemStorage.getItem(itemKey);
+  function createEnvelopePayload<K extends Items>(
+    key: K,
+    value: Schemas[K],
+    metadata: TtlMetadata,
+  ) {
+    const metadataPayload: { t: number; p?: Record<string, number> } = {
+      t: metadata.updatedAt,
+    };
 
-    if (itemValue === null) return undefined;
+    if (metadata.parts && Object.keys(metadata.parts).length > 0) {
+      metadataPayload.p = metadata.parts;
+    }
 
-    const itemOptions = items[key];
-    const validationResult = rc_parse_json(itemValue, itemOptions.schema);
+    return {
+      _: metadataPayload,
+      v: value,
+    };
+  }
 
+  function parseStoredValue<K extends Items>(
+    key: K,
+    rawValue: string,
+  ): ParsedStorageValue<Schemas[K]> | undefined {
+    let parsed: unknown;
+
+    try {
+      parsed = JSON.parse(rawValue);
+    } catch (error) {
+      console.error('[slsm] error parsing value', error);
+      return undefined;
+    }
+
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      Reflect.has(parsed, '_') &&
+      Reflect.has(parsed, 'v')
+    ) {
+      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- parsed envelope is validated as an object above
+      const parsedRecord = parsed as Record<string, unknown>;
+      const metadataSource = parsedRecord._;
+      const valueSource = parsedRecord.v;
+
+      if (typeof metadataSource !== 'object' || metadataSource === null) {
+        return undefined;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- metadata container uses dynamic keys from stored payload
+      const metadataRecord = metadataSource as Record<string, unknown>;
+      const updatedAt = metadataRecord.t;
+      if (typeof updatedAt !== 'number') return undefined;
+
+      const partsCandidate = metadataRecord.p;
+
+      const validationResult = items[key].schema.parse(valueSource);
+      if (validationResult.errors) {
+        console.error('[slsm] error parsing value', validationResult.errors);
+        return undefined;
+      }
+
+      return {
+        value: validationResult.value,
+        metadata: {
+          updatedAt,
+          parts: sanitizeParts(partsCandidate),
+        },
+      };
+    }
+
+    const validationResult = items[key].schema.parse(parsed);
     if (validationResult.errors) {
       console.error('[slsm] error parsing value', validationResult.errors);
       return undefined;
     }
 
-    return validationResult.value;
+    return {
+      value: validationResult.value,
+      metadata: undefined,
+    };
   }
 
-  // Create stores keyed by storage key (includes session ID) to handle session changes
-  const itemStores = new Map<string, Store<any>>();
+  function synthesizeMetadataFromValue<K extends Items>(
+    key: K,
+    value: Schemas[K],
+    ttl: ItemTtlOption<Schemas[K]>,
+    now: number,
+  ): TtlMetadata {
+    if ('splitIntoParts' in ttl) {
+      const parts: Record<string, number> = {};
+      for (const partKey of ttl.splitIntoParts(value)) {
+        parts[partKey] = now;
+      }
+      return {
+        updatedAt: now,
+        parts: Object.keys(parts).length === 0 ? undefined : parts,
+      };
+    }
+
+    return { updatedAt: now };
+  }
+
+  function evaluateTtl<K extends Items>(
+    key: K,
+    value: Schemas[K],
+    metadata: TtlMetadata,
+    ttl: ItemTtlOption<Schemas[K]>,
+    now: number,
+  ): {
+    expired: boolean;
+    changed: boolean;
+    value: Schemas[K];
+    metadata: TtlMetadata;
+  } {
+    if (!('splitIntoParts' in ttl)) {
+      const expired = now - metadata.updatedAt >= ttl.ms;
+      return { expired, changed: false, value, metadata };
+    }
+
+    const parts = { ...(metadata.parts ?? {}) };
+    const expiredParts: string[] = [];
+
+    for (const [partKey, lastUpdated] of Object.entries(parts)) {
+      if (now - lastUpdated >= ttl.ms) {
+        expiredParts.push(partKey);
+      }
+    }
+
+    if (expiredParts.length === 0) {
+      return { expired: false, changed: false, value, metadata };
+    }
+
+    let nextValue = value;
+    for (const partKey of expiredParts) {
+      nextValue = ttl.removePart(nextValue, partKey);
+      delete parts[partKey];
+    }
+
+    const nextMetadata: TtlMetadata = {
+      updatedAt: metadata.updatedAt,
+      parts: Object.keys(parts).length === 0 ? undefined : parts,
+    };
+
+    return {
+      expired: false,
+      changed: true,
+      value: nextValue,
+      metadata: nextMetadata,
+    };
+  }
+
+  function clearTtlState(storageKey: string) {
+    const existing = ttlStates.get(storageKey);
+    if (existing?.timerId) {
+      clearTimeout(existing.timerId);
+    }
+    ttlStates.delete(storageKey);
+  }
+
+  function scheduleNextTtlCheck(storageKey: string, state: TtlState<Items>) {
+    if (!IS_BROWSER) return;
+
+    const itemOptions = items[state.key];
+    const ttl = itemOptions.ttl;
+    if (!ttl) return;
+
+    let nextExpiry: number | undefined;
+
+    if ('splitIntoParts' in ttl) {
+      const partTimes = state.parts ? Object.values(state.parts) : [];
+      if (partTimes.length > 0) {
+        nextExpiry = Math.min(
+          ...partTimes.map((timestamp) => timestamp + ttl.ms),
+        );
+      }
+    } else {
+      nextExpiry = state.updatedAt + ttl.ms;
+    }
+
+    if (nextExpiry === undefined) return;
+
+    const delay = Math.max(nextExpiry - Date.now(), 0);
+    state.timerId = setTimeout(() => {
+      runTtlCleanup(storageKey, Date.now());
+    }, delay);
+  }
+
+  function setTtlState(
+    storageKey: string,
+    key: Items,
+    metadata: TtlMetadata | undefined,
+  ) {
+    const existing = ttlStates.get(storageKey);
+    if (existing?.timerId) {
+      clearTimeout(existing.timerId);
+    }
+
+    if (!metadata) {
+      ttlStates.delete(storageKey);
+      return;
+    }
+
+    const state: TtlState<Items> = {
+      key,
+      updatedAt: metadata.updatedAt,
+      parts: metadata.parts ? { ...metadata.parts } : undefined,
+    };
+
+    ttlStates.set(storageKey, state);
+    scheduleNextTtlCheck(storageKey, state);
+  }
+
+  function runTtlCleanup(storageKey: string, now: number): boolean {
+    if (!IS_BROWSER) return false;
+
+    const itemKey = getItemKeyFromStorageKey(storageKey);
+    if (!itemKey) return false;
+
+    const itemOptions = items[itemKey];
+    if (!itemOptions.ttl) return false;
+
+    const storage = getStorageForKey(storageKey);
+
+    const rawValue = storage.getItem(storageKey);
+
+    if (rawValue === null) {
+      clearTtlState(storageKey);
+      return false;
+    }
+
+    const parsed = parseStoredValue(itemKey, rawValue);
+    if (!parsed) return false;
+
+    let metadata = parsed.metadata;
+
+    if (!metadata) {
+      metadata = synthesizeMetadataFromValue(
+        itemKey,
+        parsed.value,
+        itemOptions.ttl,
+        now,
+      );
+    }
+
+    const evaluation = evaluateTtl(
+      itemKey,
+      parsed.value,
+      metadata,
+      itemOptions.ttl,
+      now,
+    );
+
+    if (evaluation.expired) {
+      storage.removeItem(storageKey);
+      clearTtlState(storageKey);
+
+      const scopedKey = getLocalStorageItemKey(itemKey);
+      if (scopedKey && scopedKey === storageKey) {
+        const store = getStore(itemKey);
+        store.setState(items[itemKey].default);
+      }
+
+      return true;
+    }
+
+    if (evaluation.changed) {
+      const scopedKey = getLocalStorageItemKey(itemKey);
+
+      if (scopedKey && scopedKey === storageKey) {
+        const store = getStore(itemKey);
+        store.setState(klona(evaluation.value), { equalityCheck: deepEqual });
+        persistValue(itemKey, evaluation.value, storageKey, {
+          metadataOverride: evaluation.metadata,
+          source: 'cleanup',
+        });
+      } else {
+        const payload = createEnvelopePayload(
+          itemKey,
+          evaluation.value,
+          evaluation.metadata,
+        );
+        writeToStorage(storageKey, payload, storage, true);
+        setTtlState(storageKey, itemKey, evaluation.metadata);
+      }
+
+      return true;
+    }
+
+    setTtlState(storageKey, itemKey, metadata);
+    return false;
+  }
+
+  function cleanupAllTtlItems(except: string): boolean {
+    let cleaned = false;
+
+    function sweep(storage: Storage) {
+      const now = Date.now();
+      for (const storageKey of getStorageItemKeys(storage, except)) {
+        if (runTtlCleanup(storageKey, now)) {
+          cleaned = true;
+        }
+      }
+    }
+
+    sweep(localStorage);
+    sweep(sessionStorage);
+
+    return cleaned;
+  }
+
+  function applyAutoPrune<K extends Items>(
+    key: K,
+    value: Schemas[K],
+  ): Schemas[K] {
+    const itemOptions = items[key];
+    let nextValue = value;
+
+    if (itemOptions.autoPrune) {
+      nextValue = itemOptions.autoPrune(nextValue);
+    }
+
+    if (itemOptions.autoPruneBySize) {
+      const { maxKb, performPruneStep } = itemOptions.autoPruneBySize;
+      const maxBytes = maxKb * 1024;
+
+      let serialized = JSON.stringify(nextValue);
+      while (serialized.length > maxBytes) {
+        const pruned = performPruneStep(nextValue);
+        if (pruned === nextValue) break;
+        nextValue = pruned;
+        serialized = JSON.stringify(nextValue);
+      }
+    }
+
+    return nextValue;
+  }
+
+  function persistValue<K extends Items>(
+    key: K,
+    value: Schemas[K],
+    storageKey: string,
+    options?: {
+      metadataOverride?: TtlMetadata;
+      source?: 'cleanup' | 'mutation';
+    },
+  ) {
+    if (!IS_BROWSER) return;
+
+    const itemOptions = items[key];
+    const ttl = itemOptions.ttl;
+
+    let metadata = options?.metadataOverride;
+
+    if (ttl && !metadata) {
+      const now = Date.now();
+
+      if ('splitIntoParts' in ttl) {
+        const existingState = ttlStates.get(storageKey);
+        const previousParts = existingState?.parts ?? {};
+        const uniquePartKeys = Array.from(new Set(ttl.splitIntoParts(value)));
+        const nextParts: Record<string, number> = {};
+
+        for (const partKey of uniquePartKeys) {
+          nextParts[partKey] = previousParts[partKey] ?? now;
+        }
+
+        metadata = {
+          updatedAt: now,
+          parts: Object.keys(nextParts).length === 0 ? undefined : nextParts,
+        };
+      } else {
+        metadata = { updatedAt: now };
+      }
+    }
+
+    const storage = getItemStorage(key);
+    const payload =
+      ttl && metadata ? createEnvelopePayload(key, value, metadata) : value;
+
+    writeToStorage(storageKey, payload, storage, options?.source === 'cleanup');
+
+    if (ttl && metadata) {
+      setTtlState(storageKey, key, metadata);
+    } else {
+      clearTtlState(storageKey);
+    }
+  }
+
+  function getInitialValue<K extends Items>(
+    key: K,
+    storageKey: string,
+  ): InitialReadResult<Schemas[K]> | undefined {
+    if (!IS_BROWSER) return undefined;
+
+    const storage = getItemStorage(key);
+    const rawValue = storage.getItem(storageKey);
+
+    if (rawValue === null) return undefined;
+
+    const parsed = parseStoredValue(key, rawValue);
+    if (!parsed) return undefined;
+
+    const ttl = items[key].ttl;
+    if (!ttl) {
+      return { value: parsed.value, metadata: undefined, shouldPersist: false };
+    }
+
+    const now = Date.now();
+    let metadata = parsed.metadata;
+    const shouldPersist = metadata === undefined;
+
+    if (!metadata) {
+      metadata = synthesizeMetadataFromValue(key, parsed.value, ttl, now);
+    }
+
+    const evaluation = evaluateTtl(key, parsed.value, metadata, ttl, now);
+
+    if (evaluation.expired) {
+      storage.removeItem(storageKey);
+      clearTtlState(storageKey);
+      return undefined;
+    }
+
+    if (evaluation.changed) {
+      return {
+        value: evaluation.value,
+        metadata: evaluation.metadata,
+        shouldPersist: true,
+      };
+    }
+
+    return {
+      value: parsed.value,
+      metadata,
+      shouldPersist,
+    };
+  }
 
   function getStore<K extends Items>(key: K): Store<Schemas[K]> {
     const storageKey = getLocalStorageItemKey(key);
     if (!storageKey) {
-      // Return a temporary store with default value if session ID is false
       return new Store<Schemas[K]>({ state: items[key].default });
     }
 
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- this is necessary here
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- cache value retrieved from map keyed by storage identifiers
     let store = itemStores.get(storageKey) as Store<Schemas[K]> | undefined;
+
     if (!store) {
-      // Initialize store with value from storage or default value
-      const valueFromStorage = getInitialValue(key);
+      const initial = getInitialValue(key, storageKey);
+      const initialState = initial?.value ?? items[key].default;
+
       store = new Store<Schemas[K]>({
-        state: valueFromStorage ?? items[key].default,
+        state: initialState,
       });
+
       itemStores.set(storageKey, store);
+
+      if (items[key].ttl && initial?.metadata) {
+        setTtlState(storageKey, key, initial.metadata);
+      }
+
+      if (items[key].ttl && initial?.shouldPersist && initial.metadata) {
+        persistValue(key, initialState, storageKey, {
+          metadataOverride: initial.metadata,
+          source: 'cleanup',
+        });
+      }
     }
 
     return store;
   }
 
-  function deleteItemByStorageKey(storageKey: string, key?: Items) {
+  function deleteItemByStorageKey(storageKey: string) {
     sessionStorage.removeItem(storageKey);
     localStorage.removeItem(storageKey);
+    clearTtlState(storageKey);
 
-    // Reset to default value if we know the key
-    if (key) {
-      const store = getStore(key);
-      const itemOptions = items[key];
-      store.setState(itemOptions.default);
+    const itemKey = getItemKeyFromStorageKey(storageKey);
+    if (!itemKey) return;
+
+    const scopedKey = getLocalStorageItemKey(itemKey);
+    if (scopedKey && scopedKey === storageKey) {
+      const store = getStore(itemKey);
+      store.setState(items[itemKey].default);
     }
-  }
-
-  function getItemKeyFromStorageKey(storageKey: string): Items | undefined {
-    return storageKey.split('||')[1];
   }
 
   function handleQuotaExceeded(
     storageKey: string,
     operation: () => void,
     error: DOMException,
+    skipTtlCleanup = false,
   ): void {
     function tryOperation() {
       try {
@@ -186,9 +721,13 @@ export function createSmartLocalStorage<
       }
     }
 
-    // Try removing all session storage items first
-    const sessionStorageKeys = getStorageItemKeys(sessionStorage, storageKey);
+    if (!skipTtlCleanup) {
+      if (cleanupAllTtlItems(storageKey) && tryOperation()) {
+        return;
+      }
+    }
 
+    const sessionStorageKeys = getStorageItemKeys(sessionStorage, storageKey);
     if (sessionStorageKeys.length !== 0) {
       for (const itemKey of sessionStorageKeys) {
         deleteItemByStorageKey(itemKey);
@@ -197,7 +736,6 @@ export function createSmartLocalStorage<
       if (tryOperation()) return;
     }
 
-    // If still failing, remove localStorage items based on priority
     const currentSessionId = getSessionId();
 
     function getItemPriority(itemStorageKey: string): number {
@@ -210,22 +748,18 @@ export function createSmartLocalStorage<
       return sortBy(storageKeys, (key) => {
         const priority = getItemPriority(key);
         const size = localStorage.getItem(key)?.length ?? 0;
-        // Lower priority first, larger size first (negate for descending)
         return [priority, -size];
       });
     }
 
-    // Keep removing items until operation succeeds or we run out of items
     while (true) {
       const localStorageKeys = getStorageItemKeys(localStorage, storageKey);
-
       if (localStorageKeys.length === 0) break;
 
-      // Try to remove from different sessions first (sorted by priority)
       const itemsInDifferentSessions = localStorageKeys.filter(
-        (itemKey) =>
-          !itemKey.startsWith(`slsm-${currentSessionId}`) &&
-          !itemKey.startsWith(`slsm|`),
+        (key) =>
+          !key.startsWith(`slsm-${currentSessionId}`) &&
+          !key.startsWith(`slsm|`),
       );
 
       const sortedDifferentSessions = sortByPriorityAndSize(
@@ -234,29 +768,30 @@ export function createSmartLocalStorage<
 
       const firstDifferentSession = sortedDifferentSessions[0];
       if (firstDifferentSession) {
-        localStorage.removeItem(firstDifferentSession);
+        deleteItemByStorageKey(firstDifferentSession);
         if (tryOperation()) return;
         continue;
       }
 
-      // Remove from current session as last resort (sorted by priority)
       const sortedCurrentSession = sortByPriorityAndSize(localStorageKeys);
-
       const firstCurrentSession = sortedCurrentSession[0];
       if (firstCurrentSession) {
-        localStorage.removeItem(firstCurrentSession);
+        deleteItemByStorageKey(firstCurrentSession);
         if (tryOperation()) return;
       } else {
         break;
       }
     }
 
-    // Could not free up enough space
     throw error;
   }
 
-  // Centralized function to write value to storage with quota handling
-  function writeToStorage(storageKey: string, value: any, storage: Storage) {
+  function writeToStorage(
+    storageKey: string,
+    value: unknown,
+    storage: Storage,
+    skipTtlCleanup = false,
+  ) {
     function write() {
       storage.setItem(storageKey, JSON.stringify(value));
     }
@@ -270,24 +805,11 @@ export function createSmartLocalStorage<
         error instanceof DOMException &&
         error.name === 'QuotaExceededError'
       ) {
-        handleQuotaExceeded(storageKey, write, error);
+        handleQuotaExceeded(storageKey, write, error, skipTtlCleanup);
       } else {
         throw error;
       }
     }
-  }
-
-  // Update store state and persist to storage
-  function updateItem<K extends Items>(
-    key: K,
-    value: Schemas[K],
-    storageKey: string,
-  ) {
-    const store = getStore(key);
-    store.setState(klona(value), { equalityCheck: deepEqual });
-
-    const itemStorage = getItemStorage(key);
-    writeToStorage(storageKey, value, itemStorage);
   }
 
   function setItemValue<K extends Items>(
@@ -297,16 +819,14 @@ export function createSmartLocalStorage<
     const storageKey = getLocalStorageItemKey(key);
     if (!storageKey) return;
 
-    const itemOptions = items[key];
     const store = getStore(key);
+    const currentValue = store.state;
+    const nextValueInput = isFunction(value) ? value(currentValue) : value;
 
-    let finalValue = isFunction(value) ? value(store.state) : value;
+    const finalValue = applyAutoPrune(key, nextValueInput);
+    store.setState(klona(finalValue), { equalityCheck: deepEqual });
 
-    if (itemOptions.autoPrune) {
-      finalValue = itemOptions.autoPrune(finalValue);
-    }
-
-    updateItem(key, finalValue, storageKey);
+    persistValue(key, finalValue, storageKey, { source: 'mutation' });
   }
 
   if (IS_BROWSER) {
@@ -314,8 +834,6 @@ export function createSmartLocalStorage<
       if (!event.key?.startsWith('slsm')) return;
 
       const storageKey = event.key;
-
-      // Extract the item key from storage key (format: slsm[-sessionId][|s]||itemKey)
       const itemKey = getItemKeyFromStorageKey(storageKey);
       if (!itemKey) return;
 
@@ -325,39 +843,47 @@ export function createSmartLocalStorage<
       const store = getStore(itemKey);
 
       if (event.newValue === null) {
-        // Reset to default value
         store.setState(itemOptions.default);
+        clearTtlState(storageKey);
         return;
       }
 
-      const validationResult = rc_parse_json(
-        event.newValue,
-        itemOptions.schema,
-      );
+      const parsed = parseStoredValue(itemKey, event.newValue);
+      if (!parsed) return;
 
-      if (validationResult.errors) {
-        console.error('[slsm] error parsing value', validationResult.errors);
-        return;
+      const now = Date.now();
+
+      if (itemOptions.ttl) {
+        const metadata =
+          parsed.metadata ??
+          synthesizeMetadataFromValue(
+            itemKey,
+            parsed.value,
+            itemOptions.ttl,
+            now,
+          );
+
+        const cleanupApplied = runTtlCleanup(storageKey, now);
+
+        if (cleanupApplied) return;
+
+        setTtlState(storageKey, itemKey, metadata);
       }
 
-      store.setState(validationResult.value);
+      store.setState(klona(parsed.value), { equalityCheck: deepEqual });
     });
   }
 
   function getValue<K extends Items>(key: K): Schemas[K] {
-    return getStore(key).state;
+    const storageKey = getLocalStorageItemKey(key);
+    const store = getStore(key);
+
+    if (storageKey && items[key].ttl) {
+      runTtlCleanup(storageKey, Date.now());
+    }
+
+    return store.state;
   }
-
-  function setUnknownValue(key: string, value: unknown) {
-    const itemOptions = items[key];
-    if (itemOptions) {
-      const validationResult = itemOptions.schema.parse(value);
-
-      if (validationResult.errors) {
-        console.error('[slsm] error parsing value', validationResult.errors);
-        return;
-      }
-
 
   function deleteItem(key: Items) {
     const storageKey = getLocalStorageItemKey(key);
@@ -382,7 +908,6 @@ export function createSmartLocalStorage<
   return {
     set: setItemValue,
     get: getValue,
-    setUnknownValue,
 
     produce: (key, recipe) => {
       const storageKey = getLocalStorageItemKey(key);
@@ -407,13 +932,13 @@ export function createSmartLocalStorage<
     },
 
     clearAll: () => {
-      for (const storageKey of getStorageItemKeys(localStorage)) {
+      for (const storageKey of getStorageItemKeys(localStorage, undefined)) {
         localStorage.removeItem(storageKey);
         clearTtlState(storageKey);
         resetStoreToDefault(storageKey);
       }
 
-      for (const storageKey of getStorageItemKeys(sessionStorage)) {
+      for (const storageKey of getStorageItemKeys(sessionStorage, undefined)) {
         sessionStorage.removeItem(storageKey);
         clearTtlState(storageKey);
         resetStoreToDefault(storageKey);
@@ -442,11 +967,11 @@ export function createSmartLocalStorage<
         }
       }
 
-      for (const storageKey of getStorageItemKeys(localStorage)) {
+      for (const storageKey of getStorageItemKeys(localStorage, undefined)) {
         removeKeyFromStorage(storageKey, localStorage);
       }
 
-      for (const storageKey of getStorageItemKeys(sessionStorage)) {
+      for (const storageKey of getStorageItemKeys(sessionStorage, undefined)) {
         removeKeyFromStorage(storageKey, sessionStorage);
       }
     },
@@ -469,7 +994,7 @@ export function createSmartLocalStorage<
   };
 }
 
-function getStorageItemKeys(storage: Storage, except?: string) {
+function getStorageItemKeys(storage: Storage, except: string | undefined) {
   const keys: string[] = [];
 
   for (let i = 0; i < storage.length; i++) {

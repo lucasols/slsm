@@ -1,5 +1,11 @@
 /* eslint-disable @typescript-eslint/consistent-type-assertions -- assertions in tests are ok */
-import { rc_array, rc_boolean, rc_number, rc_string } from 'runcheck';
+import {
+  rc_array,
+  rc_boolean,
+  rc_number,
+  rc_object,
+  rc_string,
+} from 'runcheck';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { createSmartLocalStorage } from '../src/main.js';
 import { mockEnv } from './utils.js';
@@ -26,21 +32,6 @@ test('set and read a value in store', () => {
 
   expect(localStore.get('a')).toBe('hello');
 
-  expect(localStorage.getItem('slsm||a')).toBe('"hello"');
-});
-
-test('set unknown value without json serialization', () => {
-  const localStore = createSmartLocalStorage<{
-    a: string;
-  }>({
-    items: {
-      a: { schema: rc_string, default: '' },
-    },
-  });
-
-  localStore.setUnknownValue('a', 'hello');
-
-  expect(localStore.get('a')).toBe('hello');
   expect(localStorage.getItem('slsm||a')).toBe('"hello"');
 });
 
@@ -757,6 +748,158 @@ describe('ttl', () => {
     );
 
     mockQuota(Infinity);
+    vi.useRealTimers();
+  });
+
+  test('produce refreshes ttl timestamp', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const localStore = createSmartLocalStorage<{
+      counter: { value: number };
+    }>({
+      items: {
+        counter: {
+          schema: rc_object({
+            value: rc_number,
+          }),
+          default: { value: 0 },
+          ttl: {
+            ms: 10_000,
+          },
+        },
+      },
+    });
+
+    localStore.set('counter', { value: 1 });
+
+    vi.setSystemTime(5_000);
+
+    localStore.produce('counter', (draft) => {
+      draft.value += 1;
+    });
+
+    const stored = JSON.parse(localStorage.getItem('slsm||counter') ?? '{}') as {
+      _: { t: number };
+      v: { value: number };
+    };
+
+    expect(stored._.t).toBe(5_000);
+    expect(stored.v).toEqual({ value: 2 });
+
+    vi.useRealTimers();
+  });
+
+  test('raw value is wrapped into ttl envelope on load', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000);
+
+    localStorage.setItem('slsm||legacy', '"hello"');
+
+    const localStore = createSmartLocalStorage<{
+      legacy: string;
+    }>({
+      items: {
+        legacy: {
+          schema: rc_string,
+          default: '',
+          ttl: {
+            ms: 5_000,
+          },
+        },
+      },
+    });
+
+    expect(localStore.get('legacy')).toBe('hello');
+
+    const stored = JSON.parse(localStorage.getItem('slsm||legacy') ?? '{}') as {
+      _: { t: number };
+      v: string;
+    };
+
+    expect(stored.v).toBe('hello');
+    expect(stored._.t).toBe(2_000);
+
+    vi.useRealTimers();
+  });
+
+  test('part ttl removes missing parts on set', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const localStore = createSmartLocalStorage<{
+      feed: string[];
+    }>({
+      items: {
+        feed: {
+          schema: rc_array(rc_string),
+          default: [],
+          ttl: {
+            ms: 1_000,
+            splitIntoParts: (value) => value,
+            removePart: (value, partKey) =>
+              value.filter((entry) => entry !== partKey),
+          },
+        },
+      },
+    });
+
+    localStore.set('feed', ['a', 'b']);
+
+    const firstStored = JSON.parse(
+      localStorage.getItem('slsm||feed') ?? '{}',
+    ) as {
+      _: { t: number; p?: Record<string, number> };
+      v: string[];
+    };
+
+    expect(firstStored._.p).toEqual({ a: 0, b: 0 });
+
+    vi.setSystemTime(500);
+
+    localStore.set('feed', ['b']);
+
+    const secondStored = JSON.parse(
+      localStorage.getItem('slsm||feed') ?? '{}',
+    ) as {
+      _: { t: number; p?: Record<string, number> };
+      v: string[];
+    };
+
+    expect(secondStored.v).toEqual(['b']);
+    expect(secondStored._.p).toEqual({ b: 0 });
+
+    vi.useRealTimers();
+  });
+
+  test('session storage ttl expires item and clears entry', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const localStore = createSmartLocalStorage<{
+      sessionItem: string;
+    }>({
+      items: {
+        sessionItem: {
+          schema: rc_string,
+          default: '',
+          useSessionStorage: true,
+          ttl: {
+            ms: 1_000,
+          },
+        },
+      },
+    });
+
+    localStore.set('sessionItem', 'value');
+
+    expect(sessionStorage.getItem('slsm|s||sessionItem')).not.toBeNull();
+
+    vi.setSystemTime(2_000);
+
+    expect(localStore.get('sessionItem')).toBe('');
+    expect(sessionStorage.getItem('slsm|s||sessionItem')).toBeNull();
+
     vi.useRealTimers();
   });
 });
