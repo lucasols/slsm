@@ -6,6 +6,7 @@ import {
   rc_number,
   rc_obj_builder,
   rc_record,
+  rc_string,
   rc_unknown,
   RcType,
 } from 'runcheck';
@@ -113,13 +114,15 @@ type ValueOrSetter<T> = T | ((currentValue: T) => T);
 type Envelope = {
   t?: number;
   p?: Record<string, number>;
-  v: unknown;
+  _v: unknown;
+  c?: string;
 };
 
 const envelopeSchema = rc_obj_builder<Envelope>()({
   t: rc_number.optional(),
   p: rc_record(rc_number).optional(),
-  v: rc_unknown,
+  _v: rc_unknown,
+  c: rc_string.optional(),
 });
 
 const MS_PER_MINUTE = 60_000;
@@ -168,7 +171,6 @@ export function createSmartLocalStorage<
 >({
   getSessionId = () => '',
   items,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- will be implemented later
   compress,
 }: SmartLocalStorageOptions<Schemas>): SmartLocalStorage<Schemas> {
   const IS_BROWSER = typeof window !== 'undefined';
@@ -234,13 +236,17 @@ export function createSmartLocalStorage<
     return storageKey.split('||')[1];
   }
 
+  function getCompressionForKey<K extends Items>(key: K): Compress | undefined {
+    return items[key].compress ?? compress;
+  }
+
   function createEnvelopePayload<K extends Items>(
     key: K,
     value: Schemas[K],
     metadata: TtlMetadata,
   ) {
     const payload: Envelope = {
-      v: value,
+      _v: value,
     };
 
     payload.t = toEnvelopeMinutes(metadata.updatedAt);
@@ -273,8 +279,95 @@ export function createSmartLocalStorage<
     if (!envelopeResult.errors) {
       const envelope = envelopeResult.value;
 
+      if (envelope.c !== undefined) {
+        const compression = getCompressionForKey(key);
+
+        if (!compression) {
+          console.error(
+            '[slsm] compressed value found but no compression config provided',
+          );
+          return undefined;
+        }
+
+        if (compression.format !== envelope.c) {
+          console.error('[slsm] compression format mismatch', {
+            expected: compression.format,
+            found: envelope.c,
+          });
+          return undefined;
+        }
+
+        if (typeof envelope._v !== 'string') {
+          console.error('[slsm] compressed value must be a string');
+          return undefined;
+        }
+
+        let decompressed: string;
+        try {
+          decompressed = compression.decompressFn(envelope._v);
+        } catch (error) {
+          console.error('[slsm] error decompressing value', error);
+          return undefined;
+        }
+
+        try {
+          parsed = JSON.parse(decompressed);
+        } catch (error) {
+          console.error('[slsm] error parsing decompressed value', error);
+          return undefined;
+        }
+
+        const decompressedEnvelopeResult = envelopeSchema.parse(parsed);
+        if (!decompressedEnvelopeResult.errors) {
+          const decompressedEnvelope = decompressedEnvelopeResult.value;
+
+          if (decompressedEnvelope.t !== undefined) {
+            const validationResult = items[key].schema.parse(
+              decompressedEnvelope._v,
+            );
+            if (validationResult.errors) {
+              console.error(
+                '[slsm] error parsing value',
+                validationResult.errors,
+              );
+              return undefined;
+            }
+
+            const partsMetadata = decompressedEnvelope.p;
+            let parts: Record<string, number> | undefined;
+            if (partsMetadata && Object.keys(partsMetadata).length > 0) {
+              parts = {};
+              for (const [partKey, minuteStamp] of Object.entries(
+                partsMetadata,
+              )) {
+                parts[partKey] = fromEnvelopeMinutes(minuteStamp);
+              }
+            }
+
+            return {
+              value: validationResult.value,
+              metadata: {
+                updatedAt: fromEnvelopeMinutes(decompressedEnvelope.t),
+                parts,
+              },
+            };
+          }
+        }
+
+        const validationResult = items[key].schema.parse(parsed);
+        if (validationResult.errors) {
+          console.error('[slsm] error parsing value', validationResult.errors);
+          return undefined;
+        }
+
+        return {
+          value: validationResult.value,
+          metadata: undefined,
+        };
+      }
+
       if (envelope.t !== undefined) {
-        const validationResult = items[key].schema.parse(envelope.v);
+        const validationResult = items[key].schema.parse(envelope._v);
         if (validationResult.errors) {
           console.error('[slsm] error parsing value', validationResult.errors);
           return undefined;
@@ -344,8 +437,7 @@ export function createSmartLocalStorage<
     metadata: TtlMetadata;
   } {
     if (!('splitIntoParts' in ttl)) {
-      const expired =
-        now - metadata.updatedAt >= getTtlDurationMs(ttl);
+      const expired = now - metadata.updatedAt >= getTtlDurationMs(ttl);
       return { expired, changed: false, value, metadata };
     }
 
@@ -834,7 +926,20 @@ export function createSmartLocalStorage<
     skipTtlCleanup = false,
   ) {
     function write() {
-      storage.setItem(storageKey, JSON.stringify(value));
+      const itemKey = getItemKeyFromStorageKey(storageKey);
+      const compression = itemKey ? getCompressionForKey(itemKey) : undefined;
+
+      if (compression) {
+        const rawJson = JSON.stringify(value);
+        const compressed = compression.compressFn(rawJson);
+        const envelope: Envelope = {
+          _v: compressed,
+          c: compression.format,
+        };
+        storage.setItem(storageKey, JSON.stringify(envelope));
+      } else {
+        storage.setItem(storageKey, JSON.stringify(value));
+      }
     }
 
     if (!IS_BROWSER) return;

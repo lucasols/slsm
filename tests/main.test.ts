@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/consistent-type-assertions -- assertions in tests are ok */
 import {
   rc_array,
   rc_boolean,
@@ -504,10 +503,10 @@ describe('ttl', () => {
     const stored = JSON.parse(localStorage.getItem('slsm||a') ?? '{}') as {
       t: number;
       p?: Record<string, number>;
-      v: unknown;
+      _v: unknown;
     };
 
-    expect(stored.v).toBe('hello');
+    expect(stored._v).toBe('hello');
     expect(stored.t).toBe(toMinuteStamp(TTL_BASE_MS));
     expect(stored.p).toBeUndefined();
 
@@ -577,11 +576,13 @@ describe('ttl', () => {
     const stored = JSON.parse(localStorage.getItem('slsm||feed') ?? '{}') as {
       t: number;
       p?: Record<string, number>;
-      v: string[];
+      _v: string[];
     };
 
-    expect(stored.v).toEqual(['beta']);
-    expect(stored.p).toEqual({ beta: toMinuteStamp(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2) });
+    expect(stored._v).toEqual(['beta']);
+    expect(stored.p).toEqual({
+      beta: toMinuteStamp(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2),
+    });
 
     vi.useRealTimers();
   });
@@ -594,7 +595,7 @@ describe('ttl', () => {
       'slsm||a',
       JSON.stringify({
         t: toMinuteStamp(TTL_BASE_MS - MS_PER_MINUTE),
-        v: 'stale',
+        _v: 'stale',
       }),
     );
 
@@ -630,7 +631,7 @@ describe('ttl', () => {
           old: toMinuteStamp(TTL_BASE_MS - MS_PER_MINUTE),
           fresh: toMinuteStamp(TTL_BASE_MS + 2 * MS_PER_MINUTE),
         },
-        v: ['old', 'fresh'],
+        _v: ['old', 'fresh'],
       }),
     );
 
@@ -656,11 +657,13 @@ describe('ttl', () => {
     const stored = JSON.parse(localStorage.getItem('slsm||feed') ?? '{}') as {
       t: number;
       p?: Record<string, number>;
-      v: string[];
+      _v: string[];
     };
 
-    expect(stored.v).toEqual(['fresh']);
-    expect(stored.p).toEqual({ fresh: toMinuteStamp(TTL_BASE_MS + 2 * MS_PER_MINUTE) });
+    expect(stored._v).toEqual(['fresh']);
+    expect(stored.p).toEqual({
+      fresh: toMinuteStamp(TTL_BASE_MS + 2 * MS_PER_MINUTE),
+    });
 
     vi.useRealTimers();
   });
@@ -690,7 +693,7 @@ describe('ttl', () => {
 
     const expiredEnvelope = JSON.stringify({
       t: toMinuteStamp(TTL_BASE_MS - MS_PER_MINUTE),
-      v: 'stale',
+      _v: 'stale',
     });
 
     mockedLocalStorage.mockExternalChange('slsm||a', expiredEnvelope);
@@ -789,14 +792,16 @@ describe('ttl', () => {
       draft.value += 1;
     });
 
-    const stored = JSON.parse(localStorage.getItem('slsm||counter') ?? '{}') as {
+    const stored = JSON.parse(
+      localStorage.getItem('slsm||counter') ?? '{}',
+    ) as {
       t: number;
       p?: Record<string, number>;
-      v: { value: number };
+      _v: { value: number };
     };
 
     expect(stored.t).toBe(toMinuteStamp(TTL_BASE_MS + 5 * MS_PER_MINUTE));
-    expect(stored.v).toEqual({ value: 2 });
+    expect(stored._v).toEqual({ value: 2 });
 
     vi.useRealTimers();
   });
@@ -826,10 +831,10 @@ describe('ttl', () => {
     const stored = JSON.parse(localStorage.getItem('slsm||legacy') ?? '{}') as {
       t: number;
       p?: Record<string, number>;
-      v: string;
+      _v: string;
     };
 
-    expect(stored.v).toBe('hello');
+    expect(stored._v).toBe('hello');
     expect(stored.t).toBe(toMinuteStamp(TTL_BASE_MS + 2 * MS_PER_MINUTE));
 
     vi.useRealTimers();
@@ -863,7 +868,7 @@ describe('ttl', () => {
     ) as {
       t: number;
       p?: Record<string, number>;
-      v: string[];
+      _v: string[];
     };
 
     expect(firstStored.t).toBe(toMinuteStamp(TTL_BASE_MS));
@@ -882,12 +887,16 @@ describe('ttl', () => {
     ) as {
       t: number;
       p?: Record<string, number>;
-      v: string[];
+      _v: string[];
     };
 
-    expect(secondStored.t).toBe(toMinuteStamp(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2));
-    expect(secondStored.v).toEqual(['b']);
-    expect(secondStored.p).toEqual({ b: toMinuteStamp(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2) });
+    expect(secondStored.t).toBe(
+      toMinuteStamp(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2),
+    );
+    expect(secondStored._v).toEqual(['b']);
+    expect(secondStored.p).toEqual({
+      b: toMinuteStamp(TTL_BASE_MS + (MS_PER_MINUTE * 3) / 2),
+    });
 
     vi.useRealTimers();
   });
@@ -1582,7 +1591,9 @@ describe('autoPruneBySize', () => {
   });
 
   test('prevents infinite loop when prune step does not decrease size', () => {
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
 
     type Item = { data: string; counter: number };
 
@@ -1622,7 +1633,9 @@ describe('autoPruneBySize', () => {
   });
 
   test('prevents infinite loop and logs error when prune step increases size', () => {
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
 
     type Item = { messages: string[] };
 
@@ -1661,7 +1674,9 @@ describe('autoPruneBySize', () => {
   test('prevents true infinite loop with max iterations', () => {
     mockQuota(Infinity);
 
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
 
     type Item = { messages: string[] };
 
