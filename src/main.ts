@@ -163,7 +163,7 @@ type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
     fn: (draft: Schemas[K]) => void | Schemas[K],
   ) => void;
 
-  produceWithNullableFallback: <K extends keyof Schemas>(
+  produceWithFallback: <K extends keyof Schemas>(
     key: K,
     nullableFallback: NonNullable<Schemas[K]>,
     fn: (draft: NonNullable<Schemas[K]>) => void | Schemas[K],
@@ -1235,7 +1235,7 @@ export function createSmartLocalStorage<
       });
     },
 
-    produceWithNullableFallback: (key, nullableFallback, recipe) => {
+    produceWithFallback: (key, nullableFallback, recipe) => {
       const storageKey = getLocalStorageItemKey(key);
       if (!storageKey) return;
 

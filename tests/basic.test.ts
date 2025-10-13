@@ -435,13 +435,9 @@ describe('produceWithNullableFallback', () => {
     });
 
     // Value is null (default), should use fallback
-    localStore.produceWithNullableFallback(
-      'data',
-      { items: [] },
-      (draft) => {
-        draft.items.push('first');
-      },
-    );
+    localStore.produceWithFallback('data', { items: [] }, (draft) => {
+      draft.items.push('first');
+    });
 
     expect(localStore.get('data')).toEqual({ items: ['first'] });
     expect(localStorage.getItem('slsm||data')).not.toBeNull();
@@ -464,13 +460,9 @@ describe('produceWithNullableFallback', () => {
     expect(localStore.get('data')).toEqual({ items: ['existing'] });
 
     // Now use produceWithNullableFallback to modify it
-    localStore.produceWithNullableFallback(
-      'data',
-      { items: [] },
-      (draft) => {
-        draft.items.push('added');
-      },
-    );
+    localStore.produceWithFallback('data', { items: [] }, (draft) => {
+      draft.items.push('added');
+    });
 
     expect(localStore.get('data')).toEqual({ items: ['existing', 'added'] });
     expect(localStorage.getItem('slsm||data')).not.toBeNull();
@@ -492,13 +484,9 @@ describe('produceWithNullableFallback', () => {
     localStore.set('data', { items: ['existing'] });
 
     // Should use the actual value, not the fallback
-    localStore.produceWithNullableFallback(
-      'data',
-      { items: [] },
-      (draft) => {
-        draft.items.push('added');
-      },
-    );
+    localStore.produceWithFallback('data', { items: [] }, (draft) => {
+      draft.items.push('added');
+    });
 
     expect(localStore.get('data')).toEqual({ items: ['existing', 'added'] });
   });
@@ -518,13 +506,9 @@ describe('produceWithNullableFallback', () => {
     localStore.set('data', { items: ['hello'] });
 
     // Recipe returns undefined - should keep existing value
-    localStore.produceWithNullableFallback(
-      'data',
-      { items: [] },
-      () => {
-        return undefined;
-      },
-    );
+    localStore.produceWithFallback('data', { items: [] }, () => {
+      return undefined;
+    });
 
     expect(localStore.get('data')).toEqual({ items: ['hello'] });
   });
@@ -542,13 +526,9 @@ describe('produceWithNullableFallback', () => {
     });
 
     // Start with null
-    localStore.produceWithNullableFallback(
-      'data',
-      { items: ['fallback'] },
-      (draft) => {
-        return { items: [...draft.items, 'returned'] };
-      },
-    );
+    localStore.produceWithFallback('data', { items: ['fallback'] }, (draft) => {
+      return { items: [...draft.items, 'returned'] };
+    });
 
     expect(localStore.get('data')).toEqual({ items: ['fallback', 'returned'] });
   });
@@ -570,13 +550,9 @@ describe('produceWithNullableFallback', () => {
     expect(localStorage.getItem('slsm||data')).not.toBeNull();
 
     // Produce to set it back to null (default)
-    localStore.produceWithNullableFallback(
-      'data',
-      { count: 0 },
-      () => {
-        return null;
-      },
-    );
+    localStore.produceWithFallback('data', { count: 0 }, () => {
+      return null;
+    });
 
     expect(localStore.get('data')).toBeNull();
     // Storage should be deleted since value equals default
@@ -596,24 +572,16 @@ describe('produceWithNullableFallback', () => {
     });
 
     // Start with null, use fallback
-    localStore.produceWithNullableFallback(
-      'counter',
-      { value: 0 },
-      (draft) => {
-        draft.value = 10;
-      },
-    );
+    localStore.produceWithFallback('counter', { value: 0 }, (draft) => {
+      draft.value = 10;
+    });
 
     expect(localStore.get('counter')).toEqual({ value: 10 });
 
     // Mutate again with existing value
-    localStore.produceWithNullableFallback(
-      'counter',
-      { value: 0 },
-      (draft) => {
-        draft.value += 5;
-      },
-    );
+    localStore.produceWithFallback('counter', { value: 0 }, (draft) => {
+      draft.value += 5;
+    });
 
     expect(localStore.get('counter')).toEqual({ value: 15 });
   });
@@ -644,7 +612,7 @@ describe('produceWithNullableFallback', () => {
     };
 
     // First use with null value
-    localStore.produceWithNullableFallback('user', fallback, (draft) => {
+    localStore.produceWithFallback('user', fallback, (draft) => {
       draft.profile.name = 'John';
       draft.profile.age = 30;
     });
@@ -655,7 +623,7 @@ describe('produceWithNullableFallback', () => {
     });
 
     // Second use with existing value
-    localStore.produceWithNullableFallback('user', fallback, (draft) => {
+    localStore.produceWithFallback('user', fallback, (draft) => {
       draft.settings.theme = 'dark';
     });
 
@@ -678,14 +646,14 @@ describe('produceWithNullableFallback', () => {
     });
 
     // First use with null
-    localStore.produceWithNullableFallback('tags', [], (draft) => {
+    localStore.produceWithFallback('tags', [], (draft) => {
       draft.push('tag1', 'tag2');
     });
 
     expect(localStore.get('tags')).toEqual(['tag1', 'tag2']);
 
     // Second use with existing value
-    localStore.produceWithNullableFallback('tags', [], (draft) => {
+    localStore.produceWithFallback('tags', [], (draft) => {
       draft.push('tag3');
     });
 
@@ -705,17 +673,12 @@ describe('produceWithNullableFallback', () => {
     });
 
     // Recipe receives fallback but returns null
-    localStore.produceWithNullableFallback(
-      'data',
-      { value: 100 },
-      () => {
-        // Explicitly return null instead of using fallback
-        return null;
-      },
-    );
+    localStore.produceWithFallback('data', { value: 100 }, () => {
+      // Explicitly return null instead of using fallback
+      return null;
+    });
 
     expect(localStore.get('data')).toBeNull();
     expect(localStorage.getItem('slsm||data')).toBeNull();
   });
 });
-
