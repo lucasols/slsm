@@ -5,7 +5,7 @@ import {
   rc_object,
   rc_string,
 } from 'runcheck';
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { createSmartLocalStorage } from '../src/main.js';
 import { mockEnv } from './utils.js';
 
@@ -385,6 +385,242 @@ test('item validation', () => {
 
     expect(localStore.get('a')).toBe(1);
   }
+});
+
+test('loading invalid JSON from localStorage returns default', () => {
+  const consoleErrorSpy = vi
+    .spyOn(console, 'error')
+    .mockImplementation(() => {});
+
+  localStorage.setItem('slsm||data', '{invalid json}');
+
+  const localStore = createSmartLocalStorage<{
+    data: string;
+  }>({
+    items: {
+      data: { schema: rc_string, default: 'fallback' },
+    },
+  });
+
+  expect(localStore.get('data')).toBe('fallback');
+  expect(consoleErrorSpy).toHaveBeenCalledWith(
+    '[slsm] error parsing value',
+    expect.anything(),
+  );
+
+  consoleErrorSpy.mockRestore();
+});
+
+test('loading valid JSON but invalid shape from localStorage returns default', () => {
+  const consoleErrorSpy = vi
+    .spyOn(console, 'error')
+    .mockImplementation(() => {});
+
+  localStorage.setItem('slsm||user', JSON.stringify({ wrong: 'shape' }));
+
+  const localStore = createSmartLocalStorage<{
+    user: { name: string; age: number };
+  }>({
+    items: {
+      user: {
+        schema: rc_object({
+          name: rc_string,
+          age: rc_number,
+        }),
+        default: { name: 'Guest', age: 0 },
+      },
+    },
+  });
+
+  expect(localStore.get('user')).toEqual({ name: 'Guest', age: 0 });
+  expect(consoleErrorSpy).toHaveBeenCalledWith(
+    '[slsm] error parsing value',
+    expect.anything(),
+  );
+
+  consoleErrorSpy.mockRestore();
+});
+
+describe('data migration', () => {
+  test('migrate old schema shape to new schema shape', () => {
+    localStorage.setItem(
+      'slsm||user',
+      JSON.stringify({ name: 'John', age: 30 }),
+    );
+
+    const localStore = createSmartLocalStorage<{
+      user: { name: string; age: number; email: string };
+    }>({
+      items: {
+        user: {
+          schema: rc_object({
+            name: rc_string,
+            age: rc_number,
+            email: rc_string,
+          }),
+          default: { name: '', age: 0, email: '' },
+          migrate: (invalidValue) => {
+            if (
+              invalidValue &&
+              typeof invalidValue === 'object' &&
+              'name' in invalidValue &&
+              'age' in invalidValue &&
+              !('email' in invalidValue)
+            ) {
+              return {
+                name: invalidValue.name as string,
+                age: invalidValue.age as number,
+                email: 'migrated@example.com',
+              };
+            }
+            return undefined;
+          },
+        },
+      },
+    });
+
+    expect(localStore.get('user')).toEqual({
+      name: 'John',
+      age: 30,
+      email: 'migrated@example.com',
+    });
+  });
+
+  test('migrate returns undefined falls back to default', () => {
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+
+    localStorage.setItem('slsm||data', JSON.stringify({ wrong: 'data' }));
+
+    const localStore = createSmartLocalStorage<{
+      data: { value: string };
+    }>({
+      items: {
+        data: {
+          schema: rc_object({
+            value: rc_string,
+          }),
+          default: { value: 'default' },
+          migrate: () => {
+            return undefined;
+          },
+        },
+      },
+    });
+
+    expect(localStore.get('data')).toEqual({ value: 'default' });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[slsm] error parsing value',
+      expect.anything(),
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  test('migrate returns invalid value falls back to default', () => {
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+
+    localStorage.setItem('slsm||data', JSON.stringify({ wrong: 'data' }));
+
+    const localStore = createSmartLocalStorage<{
+      data: { value: string };
+    }>({
+      items: {
+        data: {
+          schema: rc_object({
+            value: rc_string,
+          }),
+          default: { value: 'default' },
+          migrate: () => {
+            return { value: 123 } as unknown as { value: string };
+          },
+        },
+      },
+    });
+
+    expect(localStore.get('data')).toEqual({ value: 'default' });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[slsm] error parsing value',
+      expect.anything(),
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[slsm] migrated value failed validation',
+      expect.anything(),
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  test('migrate is not called when data is valid', () => {
+    const migrateFn = vi.fn();
+
+    localStorage.setItem(
+      'slsm||user',
+      JSON.stringify({ name: 'John', age: 30, email: 'john@example.com' }),
+    );
+
+    const localStore = createSmartLocalStorage<{
+      user: { name: string; age: number; email: string };
+    }>({
+      items: {
+        user: {
+          schema: rc_object({
+            name: rc_string,
+            age: rc_number,
+            email: rc_string,
+          }),
+          default: { name: '', age: 0, email: '' },
+          migrate: migrateFn,
+        },
+      },
+    });
+
+    expect(localStore.get('user')).toEqual({
+      name: 'John',
+      age: 30,
+      email: 'john@example.com',
+    });
+    expect(migrateFn).not.toHaveBeenCalled();
+  });
+
+  test('migrate error is caught and falls back to default', () => {
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+
+    localStorage.setItem('slsm||data', JSON.stringify({ wrong: 'data' }));
+
+    const localStore = createSmartLocalStorage<{
+      data: { value: string };
+    }>({
+      items: {
+        data: {
+          schema: rc_object({
+            value: rc_string,
+          }),
+          default: { value: 'default' },
+          migrate: () => {
+            throw new Error('Migration failed');
+          },
+        },
+      },
+    });
+
+    expect(localStore.get('data')).toEqual({ value: 'default' });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[slsm] error parsing value',
+      expect.anything(),
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[slsm] error during migration',
+      expect.anything(),
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
 });
 
 test('bug: store keeps reference of set values', () => {

@@ -79,6 +79,15 @@ type ItemOptions<V> = {
    * Delay storage sync to the store. Use `false` to disable the global sync delay.
    */
   syncDelay?: SyncDelay | false;
+  /**
+   * Called when stored data fails schema validation.
+   * Use this to migrate data from old schema shapes to new ones.
+   *
+   * @param invalidValue - The parsed value that failed validation
+   * @param validationErrors - Errors from runcheck schema validation
+   * @returns Valid migrated value, or undefined to use default
+   */
+  migrate?: (invalidValue: unknown, validationErrors: unknown) => V | undefined;
 };
 
 type ItemTtlOption<V> = NonNullable<ItemOptions<V>['ttl']>;
@@ -290,6 +299,34 @@ export function createSmartLocalStorage<
     }
   }
 
+  function tryMigrateValue<K extends Items>(
+    key: K,
+    invalidValue: unknown,
+    validationErrors: unknown,
+  ): Schemas[K] | undefined {
+    const migrate = items[key].migrate;
+    if (!migrate) return undefined;
+
+    try {
+      const migratedValue = migrate(invalidValue, validationErrors);
+      if (migratedValue === undefined) return undefined;
+
+      const validationResult = items[key].schema.parse(migratedValue);
+      if (validationResult.errors) {
+        console.error(
+          '[slsm] migrated value failed validation',
+          validationResult.errors,
+        );
+        return undefined;
+      }
+
+      return validationResult.value;
+    } catch (error) {
+      console.error('[slsm] error during migration', error);
+      return undefined;
+    }
+  }
+
   function createEnvelopePayload<K extends Items>(
     key: K,
     value: Schemas[K],
@@ -380,6 +417,34 @@ export function createSmartLocalStorage<
                 '[slsm] error parsing value',
                 validationResult.errors,
               );
+
+              const migratedValue = tryMigrateValue(
+                key,
+                decompressedEnvelope._v,
+                validationResult.errors,
+              );
+
+              if (migratedValue !== undefined) {
+                const partsMetadata = decompressedEnvelope.p;
+                let parts: Record<string, number> | undefined;
+                if (partsMetadata && Object.keys(partsMetadata).length > 0) {
+                  parts = {};
+                  for (const [partKey, minuteStamp] of Object.entries(
+                    partsMetadata,
+                  )) {
+                    parts[partKey] = fromEnvelopeMinutes(minuteStamp);
+                  }
+                }
+
+                return {
+                  value: migratedValue,
+                  metadata: {
+                    updatedAt: fromEnvelopeMinutes(decompressedEnvelope.t),
+                    parts,
+                  },
+                };
+              }
+
               return undefined;
             }
 
@@ -407,6 +472,20 @@ export function createSmartLocalStorage<
         const validationResult = items[key].schema.parse(parsed);
         if (validationResult.errors) {
           console.error('[slsm] error parsing value', validationResult.errors);
+
+          const migratedValue = tryMigrateValue(
+            key,
+            parsed,
+            validationResult.errors,
+          );
+
+          if (migratedValue !== undefined) {
+            return {
+              value: migratedValue,
+              metadata: undefined,
+            };
+          }
+
           return undefined;
         }
 
@@ -420,6 +499,34 @@ export function createSmartLocalStorage<
         const validationResult = items[key].schema.parse(envelope._v);
         if (validationResult.errors) {
           console.error('[slsm] error parsing value', validationResult.errors);
+
+          const migratedValue = tryMigrateValue(
+            key,
+            envelope._v,
+            validationResult.errors,
+          );
+
+          if (migratedValue !== undefined) {
+            const partsMetadata = envelope.p;
+            let parts: Record<string, number> | undefined;
+            if (partsMetadata && Object.keys(partsMetadata).length > 0) {
+              parts = {};
+              for (const [partKey, minuteStamp] of Object.entries(
+                partsMetadata,
+              )) {
+                parts[partKey] = fromEnvelopeMinutes(minuteStamp);
+              }
+            }
+
+            return {
+              value: migratedValue,
+              metadata: {
+                updatedAt: fromEnvelopeMinutes(envelope.t),
+                parts,
+              },
+            };
+          }
+
           return undefined;
         }
 
@@ -445,6 +552,20 @@ export function createSmartLocalStorage<
     const validationResult = items[key].schema.parse(parsed);
     if (validationResult.errors) {
       console.error('[slsm] error parsing value', validationResult.errors);
+
+      const migratedValue = tryMigrateValue(
+        key,
+        parsed,
+        validationResult.errors,
+      );
+
+      if (migratedValue !== undefined) {
+        return {
+          value: migratedValue,
+          metadata: undefined,
+        };
+      }
+
       return undefined;
     }
 
