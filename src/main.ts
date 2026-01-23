@@ -31,7 +31,7 @@ type Compress = {
   format: string;
 };
 
-type ItemOptions<V> = {
+type ItemOptions<V, Schemas extends Record<string, unknown>> = {
   schema: RcType<V>;
   default: V;
   syncTabsState?: boolean;
@@ -88,9 +88,15 @@ type ItemOptions<V> = {
    * @returns Valid migrated value, or undefined to use default
    */
   migrate?: (invalidValue: unknown, validationErrors: unknown) => V | undefined;
+  /**
+   * Called when stored item data is not present. Use to initialize from other items or any other source.
+   */
+  initializeFrom?: (
+    getOtherItemValue: <K extends keyof Schemas>(key: K) => Schemas[K],
+  ) => V | undefined;
 };
 
-type ItemTtlOption<V> = NonNullable<ItemOptions<V>['ttl']>;
+type ItemTtlOption<V> = NonNullable<ItemOptions<V, Record<string, unknown>>['ttl']>;
 
 type TtlMetadata = {
   updatedAt: number;
@@ -118,7 +124,7 @@ type InitialReadResult<V> = {
 type SmartLocalStorageOptions<Schemas extends Record<string, unknown>> = {
   getSessionId?: () => string | false;
   items: {
-    [K in keyof Schemas]: ItemOptions<Schemas[K]>;
+    [K in keyof Schemas]: ItemOptions<Schemas[K], Schemas>;
   };
   /**
    * Global compress function to use for all items
@@ -323,6 +329,46 @@ export function createSmartLocalStorage<
       return validationResult.value;
     } catch (error) {
       console.error('[slsm] error during migration', error);
+      return undefined;
+    }
+  }
+
+  function tryInitializeFrom<K extends Items>(
+    key: K,
+  ): Schemas[K] | undefined {
+    const initializeFrom = items[key].initializeFrom;
+    if (!initializeFrom) return undefined;
+
+    try {
+      function getOtherItemValue<OtherK extends Items>(
+        otherKey: OtherK,
+      ): Schemas[OtherK] {
+        const otherStorageKey = getLocalStorageItemKey(otherKey);
+        if (!otherStorageKey) return items[otherKey].default;
+
+        const storage = getItemStorage(otherKey);
+        const rawValue = storage.getItem(otherStorageKey);
+        if (rawValue === null) return items[otherKey].default;
+
+        const parsed = parseStoredValue(otherKey, rawValue);
+        return parsed?.value ?? items[otherKey].default;
+      }
+
+      const initializedValue = initializeFrom(getOtherItemValue);
+      if (initializedValue === undefined) return undefined;
+
+      const validationResult = items[key].schema.parse(initializedValue);
+      if (validationResult.errors) {
+        console.error(
+          '[slsm] initializeFrom value failed validation',
+          validationResult.errors,
+        );
+        return undefined;
+      }
+
+      return validationResult.value;
+    } catch (error) {
+      console.error('[slsm] error during initializeFrom', error);
       return undefined;
     }
   }
@@ -983,7 +1029,31 @@ export function createSmartLocalStorage<
     const storage = getItemStorage(key);
     const rawValue = storage.getItem(storageKey);
 
-    if (rawValue === null) return undefined;
+    if (rawValue === null) {
+      const initializedValue = tryInitializeFrom(key);
+      if (initializedValue !== undefined) {
+        const ttl = items[key].ttl;
+        if (ttl) {
+          const now = Date.now();
+          return {
+            value: initializedValue,
+            metadata: synthesizeMetadataFromValue(
+              key,
+              initializedValue,
+              ttl,
+              now,
+            ),
+            shouldPersist: true,
+          };
+        }
+        return {
+          value: initializedValue,
+          metadata: undefined,
+          shouldPersist: true,
+        };
+      }
+      return undefined;
+    }
 
     const parsed = parseStoredValue(key, rawValue);
     if (!parsed) return undefined;
@@ -1052,9 +1122,10 @@ export function createSmartLocalStorage<
         setTtlState(storageKey, key, initial.metadata);
       }
 
-      // Persist if TTL metadata was synthesized or if auto-pruning changed the value
+      // Persist if TTL metadata was synthesized, migrated from other item, or auto-pruning changed the value
       const shouldPersist =
         (items[key].ttl && initial?.shouldPersist && initial.metadata) ||
+        (!items[key].ttl && initial?.shouldPersist) ||
         wasPruned;
 
       if (shouldPersist) {
