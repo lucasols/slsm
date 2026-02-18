@@ -92,7 +92,7 @@ type ItemOptions<V, Schemas extends Record<string, unknown>> = {
    * Called when stored item data is not present. Use to initialize from other items or any other source.
    */
   initializeFrom?: (
-    getOtherItemValue: <K extends keyof Schemas>(key: K) => Schemas[K],
+    getOtherItemValue: <K extends keyof Schemas>(key: K, deleteAfterRead: boolean) => Schemas[K],
   ) => V | undefined;
 };
 
@@ -225,6 +225,8 @@ export function createSmartLocalStorage<
       firstScheduledAt?: number;
     }
   >();
+  const initializeFromAttemptedStorageKeys = new Set<string>();
+  let initializeFromItemKeys: Items[] | undefined;
 
   if (IS_BROWSER) {
     requestIdleCallback(function handleIdleCleanup() {
@@ -256,6 +258,12 @@ export function createSmartLocalStorage<
       sweepStorage(localStorage);
       sweepStorage(sessionStorage);
     });
+  }
+
+  // Run initializeFrom eagerly at startup and whenever new session-scoped keys
+  // become available.
+  if (IS_BROWSER) {
+    runInitializeFromMigrations();
   }
 
   function getItemStorage(key: Items) {
@@ -335,13 +343,16 @@ export function createSmartLocalStorage<
 
   function tryInitializeFrom<K extends Items>(
     key: K,
-  ): Schemas[K] | undefined {
+  ): { value: Schemas[K]; keysToDelete: Set<string> } | undefined {
     const initializeFrom = items[key].initializeFrom;
     if (!initializeFrom) return undefined;
 
     try {
+      const keysToDelete = new Set<string>();
+
       function getOtherItemValue<OtherK extends Items>(
         otherKey: OtherK,
+        deleteAfterRead: boolean,
       ): Schemas[OtherK] {
         const otherStorageKey = getLocalStorageItemKey(otherKey);
         if (!otherStorageKey) return items[otherKey].default;
@@ -349,6 +360,10 @@ export function createSmartLocalStorage<
         const storage = getItemStorage(otherKey);
         const rawValue = storage.getItem(otherStorageKey);
         if (rawValue === null) return items[otherKey].default;
+
+        if (deleteAfterRead) {
+          keysToDelete.add(otherStorageKey);
+        }
 
         const parsed = parseStoredValue(otherKey, rawValue);
         return parsed?.value ?? items[otherKey].default;
@@ -366,10 +381,67 @@ export function createSmartLocalStorage<
         return undefined;
       }
 
-      return validationResult.value;
+      return { value: validationResult.value, keysToDelete };
     } catch (error) {
       console.error('[slsm] error during initializeFrom', error);
       return undefined;
+    }
+  }
+
+  function runInitializeFromMigrations(): void {
+    if (!IS_BROWSER) return;
+
+    const allKeysToDelete = new Set<string>();
+    function runMigrationForKey(key: Items): void {
+      const storageKey = getLocalStorageItemKey(key);
+      if (!storageKey) return;
+
+      if (initializeFromAttemptedStorageKeys.has(storageKey)) return;
+      initializeFromAttemptedStorageKeys.add(storageKey);
+
+      const storage = getItemStorage(key);
+      if (storage.getItem(storageKey) !== null) return;
+
+      const result = tryInitializeFrom(key);
+      if (!result) return;
+
+      const ttl = items[key].ttl;
+      if (ttl) {
+        const now = Date.now();
+        const metadata = synthesizeMetadataFromValue(
+          key,
+          result.value,
+          ttl,
+          now,
+        );
+        const payload = createEnvelopePayload(key, result.value, metadata);
+        writeToStorage(storageKey, payload, storage);
+      } else {
+        writeToStorage(storageKey, result.value, storage);
+      }
+
+      for (const k of result.keysToDelete) {
+        allKeysToDelete.add(k);
+      }
+    }
+
+    if (!initializeFromItemKeys) {
+      initializeFromItemKeys = [];
+
+      for (const key in items) {
+        if (!items[key].initializeFrom) continue;
+        initializeFromItemKeys.push(key);
+        runMigrationForKey(key);
+      }
+    } else {
+      for (const key of initializeFromItemKeys) {
+        runMigrationForKey(key);
+      }
+    }
+
+    for (const storageKey of allKeysToDelete) {
+      localStorage.removeItem(storageKey);
+      sessionStorage.removeItem(storageKey);
     }
   }
 
@@ -1029,31 +1101,7 @@ export function createSmartLocalStorage<
     const storage = getItemStorage(key);
     const rawValue = storage.getItem(storageKey);
 
-    if (rawValue === null) {
-      const initializedValue = tryInitializeFrom(key);
-      if (initializedValue !== undefined) {
-        const ttl = items[key].ttl;
-        if (ttl) {
-          const now = Date.now();
-          return {
-            value: initializedValue,
-            metadata: synthesizeMetadataFromValue(
-              key,
-              initializedValue,
-              ttl,
-              now,
-            ),
-            shouldPersist: true,
-          };
-        }
-        return {
-          value: initializedValue,
-          metadata: undefined,
-          shouldPersist: true,
-        };
-      }
-      return undefined;
-    }
+    if (rawValue === null) return undefined;
 
     const parsed = parseStoredValue(key, rawValue);
     if (!parsed) return undefined;
@@ -1099,6 +1147,8 @@ export function createSmartLocalStorage<
     if (!storageKey) {
       return new Store<Schemas[K]>({ state: items[key].default });
     }
+
+    runInitializeFromMigrations();
 
     // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- cache value retrieved from map keyed by storage identifiers
     let store = itemStores.get(storageKey) as Store<Schemas[K]> | undefined;
