@@ -171,3 +171,45 @@ test('invalidate key on storage event', () => {
 
   expect(localStore.get('a')).toBe('world');
 });
+
+test('ignores storage events for stale item keys', () => {
+  const localStore = createSmartLocalStorage<{
+    known: string;
+  }>({
+    items: {
+      known: { schema: rc_string, default: '', syncTabsState: true },
+    },
+  });
+
+  localStore.set('known', 'current');
+
+  expect(() => {
+    mockedLocalStorage.mockExternalChange('slsm||removedItem', null);
+  }).not.toThrow();
+
+  expect(localStore.get('known')).toBe('current');
+});
+
+test('clearAll ignores stale item keys', () => {
+  const localStore = createSmartLocalStorage<{
+    known: string;
+  }>({
+    items: {
+      known: { schema: rc_string, default: '' },
+    },
+  });
+
+  localStore.set('known', 'current');
+  localStorage.setItem('slsm||removedItem', '"stale"');
+
+  expect(() => {
+    localStore.clearAll();
+  }).not.toThrow();
+
+  expect(getStorageItems()).toMatchInlineSnapshot(`
+    {
+      "local": {},
+      "session": {},
+    }
+  `);
+});

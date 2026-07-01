@@ -363,6 +363,54 @@ test('quota cleanup prunes expired ttl before other keys', () => {
   vi.useRealTimers();
 });
 
+test('quota cleanup removes stale item keys without crashing', () => {
+  mockQuota(Infinity);
+
+  const localStore = createSmartLocalStorage<{
+    known: string;
+    newItem: string;
+  }>({
+    items: {
+      known: { schema: rc_string, default: '', priority: 5 },
+      newItem: { schema: rc_string, default: '', priority: 5 },
+    },
+  });
+
+  localStore.set('known', 'x'.repeat(20));
+  localStorage.setItem('slsm||removedItem', JSON.stringify('x'.repeat(200)));
+
+  const newValue = 'x'.repeat(60);
+  const newValueSerialized = JSON.stringify(newValue);
+  const currentItems = mockedLocalStorage.getItems();
+  const bytesWithStale = JSON.stringify({
+    ...currentItems,
+    'slsm||newItem': newValueSerialized,
+  }).length;
+
+  const { 'slsm||removedItem': _removedItem, ...itemsWithoutStale } =
+    currentItems;
+  const bytesWithoutStale = JSON.stringify({
+    ...itemsWithoutStale,
+    'slsm||newItem': newValueSerialized,
+  }).length;
+
+  expect(bytesWithStale).toBeGreaterThan(bytesWithoutStale);
+
+  mockQuota(bytesWithoutStale + 5);
+
+  expect(() => {
+    localStore.set('newItem', newValue);
+  }).not.toThrow();
+
+  expect(localStorage.getItem('slsm||removedItem')).toBeNull();
+  expect(localStorage.getItem('slsm||known')).toBe(
+    JSON.stringify('x'.repeat(20)),
+  );
+  expect(localStorage.getItem('slsm||newItem')).toBe(JSON.stringify(newValue));
+
+  mockQuota(Infinity);
+});
+
 test('bug: set a item with a value that exceeds the quota', () => {
   mockQuota(900);
 

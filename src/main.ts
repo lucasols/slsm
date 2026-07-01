@@ -1,6 +1,7 @@
-import { sortBy } from '@lucasols/utils/arrayUtils';
-import { isFunction } from '@lucasols/utils/assertions';
-import { deepEqual } from '@lucasols/utils/deepEqual';
+import { sortBy } from '@ls-stack/utils/arrayUtils';
+import { deepEqual } from '@ls-stack/utils/deepEqual';
+import { asPossiblyUndefined } from '@ls-stack/utils/typingFnUtils';
+import { isFunction } from '@ls-stack/utils/typeGuards';
 import { klona } from 'klona';
 import {
   rc_number,
@@ -240,9 +241,8 @@ export function createSmartLocalStorage<
             continue;
           }
 
-          const itemOptions = items[itemKey];
+          const itemOptions = asPossiblyUndefined(items[itemKey]);
 
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- storage may contain keys removed from configuration
           if (!itemOptions) {
             storage.removeItem(storageKey);
             clearTtlState(storageKey);
@@ -830,7 +830,8 @@ export function createSmartLocalStorage<
     const itemKey = getItemKeyFromStorageKey(storageKey);
     if (!itemKey) return false;
 
-    const itemOptions = items[itemKey];
+    const itemOptions = asPossiblyUndefined(items[itemKey]);
+    if (!itemOptions) return false;
     if (!itemOptions.ttl) return false;
 
     const storage = getStorageForKey(storageKey);
@@ -1227,11 +1228,14 @@ export function createSmartLocalStorage<
     const itemKey = getItemKeyFromStorageKey(storageKey);
     if (!itemKey) return;
 
+    const itemOptions = asPossiblyUndefined(items[itemKey]);
+    if (!itemOptions) return;
+
     const scopedKey = getLocalStorageItemKey(itemKey);
     if (scopedKey && scopedKey === storageKey) {
       isInternalUpdate.set(storageKey, true);
       const store = getStore(itemKey);
-      store.setState(items[itemKey].default);
+      store.setState(itemOptions.default);
     }
   }
 
@@ -1276,7 +1280,7 @@ export function createSmartLocalStorage<
     function getItemPriority(itemStorageKey: string): number {
       const itemKey = getItemKeyFromStorageKey(itemStorageKey);
       if (!itemKey) return 0;
-      return items[itemKey].priority ?? 0;
+      return asPossiblyUndefined(items[itemKey])?.priority ?? 0;
     }
 
     function sortByPriorityAndSize(storageKeys: string[]) {
@@ -1388,7 +1392,12 @@ export function createSmartLocalStorage<
       const itemKey = getItemKeyFromStorageKey(storageKey);
       if (!itemKey) return;
 
-      const itemOptions = items[itemKey];
+      const itemOptions = asPossiblyUndefined(items[itemKey]);
+      if (!itemOptions) {
+        clearTtlState(storageKey);
+        cancelPendingSync(storageKey);
+        return;
+      }
       if (!itemOptions.syncTabsState) return;
 
       isInternalUpdate.set(storageKey, true);
@@ -1453,12 +1462,14 @@ export function createSmartLocalStorage<
 
   function resetStoreToDefault(storageKey: string) {
     const itemKey = getItemKeyFromStorageKey(storageKey);
-    if (itemKey) {
-      cancelPendingSync(storageKey);
-      isInternalUpdate.set(storageKey, true);
-      const store = getStore(itemKey);
-      store.setState(items[itemKey].default);
-    }
+    const itemOptions =
+      itemKey ? asPossiblyUndefined(items[itemKey]) : undefined;
+    if (!itemKey || !itemOptions) return;
+
+    cancelPendingSync(storageKey);
+    isInternalUpdate.set(storageKey, true);
+    const store = getStore(itemKey);
+    store.setState(itemOptions.default);
   }
 
   return {
