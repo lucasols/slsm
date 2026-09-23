@@ -419,7 +419,8 @@ describe('compression', () => {
           default: [],
           ttl: {
             minutes: 1,
-            splitIntoParts: (value) => value,
+            splitIntoParts: (value) =>
+              Object.fromEntries(value.map((entry) => [entry, entry])),
             removePart: (value, partKey) =>
               value.filter((entry) => entry !== partKey),
           },

@@ -58,11 +58,10 @@ type ItemOptions<V, Schemas extends Record<string, unknown>> = {
         /**
          * Allows to split the items into parts, and remove the part when the TTL expires
          *
-         * Return an array of part keys, or a record of part key -> part value. When
-         * a record is returned, the part TTL is refreshed whenever the part value
-         * changes, otherwise it is only set when the part is first added.
+         * Returns a record of part key -> part value. The part TTL is refreshed
+         * whenever the part value changes.
          */
-        splitIntoParts: (value: V) => string[] | Record<string, unknown>;
+        splitIntoParts: (value: V) => Record<string, unknown>;
         /**
          * Function to remove the part when the TTL expires
          */
@@ -175,10 +174,6 @@ function fromEnvelopeMinutes(minuteStamp: number): number {
 
 function getTtlDurationMs<V>(ttl: ItemTtlOption<V>): number {
   return ttl.minutes * MS_PER_MINUTE;
-}
-
-function getPartKeys(parts: string[] | Record<string, unknown>): string[] {
-  return Array.isArray(parts) ? Array.from(new Set(parts)) : Object.keys(parts);
 }
 
 type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
@@ -714,7 +709,7 @@ export function createSmartLocalStorage<
   ): TtlMetadata {
     if ('splitIntoParts' in ttl) {
       const parts: Record<string, number> = {};
-      for (const partKey of getPartKeys(ttl.splitIntoParts(value))) {
+      for (const partKey of Object.keys(ttl.splitIntoParts(value))) {
         parts[partKey] = now;
       }
       return {
@@ -1017,17 +1012,15 @@ export function createSmartLocalStorage<
           : ttlStates.get(storageKey)?.parts) ?? {};
         const parts = ttl.splitIntoParts(value);
         const previousPartValues =
-          !Array.isArray(parts) && options?.previousValue !== undefined ?
+          options?.previousValue !== undefined ?
             ttl.splitIntoParts(options.previousValue)
           : undefined;
         const nextParts: Record<string, number> = {};
 
-        for (const partKey of getPartKeys(parts)) {
+        for (const [partKey, partValue] of Object.entries(parts)) {
           const partChanged =
-            !Array.isArray(parts) &&
             previousPartValues !== undefined &&
-            !Array.isArray(previousPartValues) &&
-            !deepEqual(previousPartValues[partKey], parts[partKey]);
+            !deepEqual(previousPartValues[partKey], partValue);
 
           nextParts[partKey] =
             partChanged ? now : (previousParts[partKey] ?? now);
