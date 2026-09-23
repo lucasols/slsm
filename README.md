@@ -264,6 +264,12 @@ const storage = createSmartLocalStorage({
 
 Each feed item has its own TTL. When a part expires, it's automatically removed while keeping fresh items.
 
+Returning part keys only sets each part's timestamp when the part is first added. To refresh a part's TTL whenever its value changes, return a record of part key → part value instead:
+
+```typescript
+splitIntoParts: (feed) => Object.fromEntries(feed.map((item) => [item.id, item])),
+```
+
 ### Auto-Pruning
 
 #### Prune by Count

@@ -57,8 +57,12 @@ type ItemOptions<V, Schemas extends Record<string, unknown>> = {
         minutes: number;
         /**
          * Allows to split the items into parts, and remove the part when the TTL expires
+         *
+         * Return an array of part keys, or a record of part key -> part value. When
+         * a record is returned, the part TTL is refreshed whenever the part value
+         * changes, otherwise it is only set when the part is first added.
          */
-        splitIntoParts: (value: V) => string[];
+        splitIntoParts: (value: V) => string[] | Record<string, unknown>;
         /**
          * Function to remove the part when the TTL expires
          */
@@ -93,11 +97,16 @@ type ItemOptions<V, Schemas extends Record<string, unknown>> = {
    * Called when stored item data is not present. Use to initialize from other items or any other source.
    */
   initializeFrom?: (
-    getOtherItemValue: <K extends keyof Schemas>(key: K, deleteAfterRead: boolean) => Schemas[K],
+    getOtherItemValue: <K extends keyof Schemas>(
+      key: K,
+      deleteAfterRead: boolean,
+    ) => Schemas[K],
   ) => V | undefined;
 };
 
-type ItemTtlOption<V> = NonNullable<ItemOptions<V, Record<string, unknown>>['ttl']>;
+type ItemTtlOption<V> = NonNullable<
+  ItemOptions<V, Record<string, unknown>>['ttl']
+>;
 
 type TtlMetadata = {
   updatedAt: number;
@@ -166,6 +175,10 @@ function fromEnvelopeMinutes(minuteStamp: number): number {
 
 function getTtlDurationMs<V>(ttl: ItemTtlOption<V>): number {
   return ttl.minutes * MS_PER_MINUTE;
+}
+
+function getPartKeys(parts: string[] | Record<string, unknown>): string[] {
+  return Array.isArray(parts) ? Array.from(new Set(parts)) : Object.keys(parts);
 }
 
 type SmartLocalStorage<Schemas extends Record<string, unknown>> = {
@@ -701,7 +714,7 @@ export function createSmartLocalStorage<
   ): TtlMetadata {
     if ('splitIntoParts' in ttl) {
       const parts: Record<string, number> = {};
-      for (const partKey of ttl.splitIntoParts(value)) {
+      for (const partKey of getPartKeys(ttl.splitIntoParts(value))) {
         parts[partKey] = now;
       }
       return {
@@ -982,6 +995,7 @@ export function createSmartLocalStorage<
     options?: {
       metadataOverride?: TtlMetadata;
       source?: 'cleanup' | 'mutation';
+      previousValue?: Schemas[K];
     },
   ) {
     if (!IS_BROWSER) return;
@@ -995,13 +1009,28 @@ export function createSmartLocalStorage<
       const now = Date.now();
 
       if ('splitIntoParts' in ttl) {
-        const existingState = ttlStates.get(storageKey);
-        const previousParts = existingState?.parts ?? {};
-        const uniquePartKeys = Array.from(new Set(ttl.splitIntoParts(value)));
+        // A pending delayed sync holds newer metadata than the last write
+        const pending = pendingSyncOperations.get(storageKey);
+        const previousParts =
+          (pending ?
+            pending.metadata?.parts
+          : ttlStates.get(storageKey)?.parts) ?? {};
+        const parts = ttl.splitIntoParts(value);
+        const previousPartValues =
+          !Array.isArray(parts) && options?.previousValue !== undefined ?
+            ttl.splitIntoParts(options.previousValue)
+          : undefined;
         const nextParts: Record<string, number> = {};
 
-        for (const partKey of uniquePartKeys) {
-          nextParts[partKey] = previousParts[partKey] ?? now;
+        for (const partKey of getPartKeys(parts)) {
+          const partChanged =
+            !Array.isArray(parts) &&
+            previousPartValues !== undefined &&
+            !Array.isArray(previousPartValues) &&
+            !deepEqual(previousPartValues[partKey], parts[partKey]);
+
+          nextParts[partKey] =
+            partChanged ? now : (previousParts[partKey] ?? now);
         }
 
         metadata = {
@@ -1187,7 +1216,7 @@ export function createSmartLocalStorage<
       }
 
       // Use middleware to apply transformations and persist changes
-      store.addMiddleware(({ next }) => {
+      store.addMiddleware(({ current, next }) => {
         // Skip if this is an internal update (from storage, TTL cleanup, etc.)
         if (isInternalUpdate.get(storageKey)) {
           isInternalUpdate.set(storageKey, false);
@@ -1209,7 +1238,10 @@ export function createSmartLocalStorage<
         }
 
         // Persist the pruned value
-        persistValue(key, prunedValue, storageKey, { source: 'mutation' });
+        persistValue(key, prunedValue, storageKey, {
+          source: 'mutation',
+          previousValue: current,
+        });
 
         // Return pruned value if it changed, otherwise allow the update
         return prunedValue !== next ? prunedValue : true;

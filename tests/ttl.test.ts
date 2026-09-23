@@ -1,4 +1,10 @@
-import { rc_array, rc_number, rc_object, rc_string } from 'runcheck';
+import {
+  rc_array,
+  rc_boolean,
+  rc_number,
+  rc_object,
+  rc_string,
+} from 'runcheck';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { createSmartLocalStorage } from '../src/main.js';
 import { mockEnv } from './utils.js';
@@ -472,3 +478,95 @@ describe('set to undefined or default clears TTL', () => {
   });
 });
 
+describe('parts returned as record', () => {
+  type Entry = { id: string; responded: boolean };
+
+  function createFeedStore(syncDelay?: { type: 'debounce'; ms: number }) {
+    return createSmartLocalStorage<{ feed: Entry[] }>({
+      items: {
+        feed: {
+          schema: rc_array(rc_object({ id: rc_string, responded: rc_boolean })),
+          default: [],
+          syncDelay,
+          ttl: {
+            minutes: 10,
+            splitIntoParts: (feed) =>
+              Object.fromEntries(feed.map((entry) => [entry.id, entry])),
+            removePart: (feed, partKey) =>
+              feed.filter((entry) => entry.id !== partKey),
+          },
+        },
+      },
+    });
+  }
+
+  function getStoredParts() {
+    const stored = JSON.parse(localStorage.getItem('slsm||feed') ?? '{}') as {
+      p?: Record<string, number>;
+    };
+    return stored.p;
+  }
+
+  test('refreshes part ttl when the part value changes', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(TTL_BASE_MS);
+
+    const localStore = createFeedStore();
+
+    localStore.set('feed', [
+      { id: 'a', responded: false },
+      { id: 'b', responded: false },
+    ]);
+
+    vi.setSystemTime(TTL_BASE_MS + 5 * MS_PER_MINUTE);
+
+    localStore.set('feed', [
+      { id: 'a', responded: true },
+      { id: 'b', responded: false },
+    ]);
+
+    expect(getStoredParts()).toEqual({
+      a: toMinuteStamp(TTL_BASE_MS + 5 * MS_PER_MINUTE),
+      b: toMinuteStamp(TTL_BASE_MS),
+    });
+
+    vi.advanceTimersByTime(6 * MS_PER_MINUTE);
+
+    expect(localStore.get('feed')).toEqual([{ id: 'a', responded: true }]);
+
+    vi.useRealTimers();
+  });
+
+  test('refreshes changed part ttl with a pending debounced sync', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(TTL_BASE_MS);
+
+    const localStore = createFeedStore({ type: 'debounce', ms: 1000 });
+
+    localStore.set('feed', [
+      { id: 'a', responded: false },
+      { id: 'b', responded: false },
+    ]);
+    vi.advanceTimersByTime(1000);
+
+    vi.setSystemTime(TTL_BASE_MS + 5 * MS_PER_MINUTE);
+    localStore.set('feed', [
+      { id: 'a', responded: true },
+      { id: 'b', responded: false },
+    ]);
+
+    vi.setSystemTime(TTL_BASE_MS + 6 * MS_PER_MINUTE);
+    localStore.set('feed', [
+      { id: 'a', responded: true },
+      { id: 'b', responded: true },
+    ]);
+    vi.advanceTimersByTime(1000);
+
+    expect(getStoredParts()).toEqual({
+      a: toMinuteStamp(TTL_BASE_MS + 5 * MS_PER_MINUTE),
+      b: toMinuteStamp(TTL_BASE_MS + 6 * MS_PER_MINUTE),
+    });
+
+    vi.useRealTimers();
+  });
+});
