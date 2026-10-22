@@ -1616,7 +1616,7 @@ export function createSmartLocalStorage<
         selector: (value: Schemas[typeof key]) => S,
       ) {
         const store = getStore(key);
-        return store.useSelector(selector, { useExternalDeps: true });
+        return store.useSelector(selector);
       };
     },
 

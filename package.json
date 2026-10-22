@@ -63,7 +63,7 @@
   "dependencies": {
     "klona": "^2.0.6",
     "runcheck": "^1.21.0",
-    "t-state": "^9.9.0"
+    "t-state": "^10.0.1"
   },
   "peerDependencies": {
     "react": "^18.2.0 || ^19.0.0",
