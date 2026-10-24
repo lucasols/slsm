@@ -26,6 +26,13 @@ This project uses **pnpm**. Always use `pnpm` commands, never `npm` or `npx`.
 - `pnpm build:no-test` - Build package without running tests (uses tsup)
 - `pnpm pre-publish` - Pre-publish check: validates sync state and builds
 
+## Git and Publishing Workflow
+
+These are pre-approved, do them without asking the user for confirmation:
+
+- Always deliver changes through a pull request: create a branch from `main`, commit, push and open the PR with `gh pr create`. Never commit directly to `main`
+- Publish packages only from `main`, after the PR with the changes is merged: switch to an up-to-date `main` and run `pkg-manager publish --type <patch|minor|major>` from the repo root
+
 ## Architecture
 
 ### Core Implementation
